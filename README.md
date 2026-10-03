@@ -1,8 +1,9 @@
 # Trade Journal
 
 A personal trading journal and analytics app inspired by Tradezella, built with
-Streamlit, SQLAlchemy and pandas. Import your broker's CSV, tag trades, keep a daily
-journal, define strategy playbooks and see where your edge is.
+Streamlit, SQLAlchemy and pandas. It covers **US stocks, futures, forex, commodities
+and crypto**, with all accounts in **USD**. Import your broker's CSV, tag trades, keep
+a daily journal, run your playbooks and see where your edge is.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -10,17 +11,17 @@ journal, define strategy playbooks and see where your edge is.
 
 | Area | What you get |
 |---|---|
-| **Import** | CSV import with a column-mapping screen and reusable *broker presets*; manual trade entry; partial fills grouped into trades; duplicate rows skipped; multiple accounts, each with its own currency (default MYR) |
+| **Import** | CSV import with a column-mapping screen and reusable *broker presets*; manual trade entry; partial fills grouped into trades; duplicate rows skipped; multiple USD accounts; contract multipliers for futures, forex lots and spot commodities ([details](#markets-and-instruments)) |
 | **Dashboard** | Net P&L, win rate, profit factor, avg win, avg loss, avg win/loss ratio, expectancy, total trades, max drawdown, cumulative P&L curve with drawdown shading, daily P&L bars and a 0–100 *journal score* radar |
 | **Calendar** | Monthly calendar with per-day net P&L, trade count and journal mood, colored green/red, with weekly totals. Click a day to see its trades and journal entry |
 | **Trade log** | Sortable, filterable table (symbol, side, status, result, tags, playbook) with CSV export. Select a row to open the trade |
 | **Trade detail** | Entry/exit, P&L, fees, R-multiple (once a stop loss is set), holding time, markdown notes, screenshot uploads (stored locally), tags, playbook checklist, executions |
-| **Tags** | Setups, Mistakes and Emotions, with custom tags; several tags per trade |
+| **Tags** | Three setups (**Golden Ratio - 0.618 retracement**, **Supply/Demand zone**, **ICT - Liquidity Sweep + BOS + Imbalance**), plus Mistakes and Emotions. Custom tags can be added; several tags per trade |
 | **Daily journal** | One entry per trading day: pre-market plan, post-market review, mood (1–5) and notes |
-| **Playbooks** | Name, description, entry/exit rules and a checklist. Link trades, tick the criteria that were met, and see per-playbook stats and checklist adherence |
-| **Reports** | P&L, win rate and trade count by symbol, day of week, entry hour, holding time, long vs short, each tag and month |
+| **Playbooks** | One playbook per setup, each with a description, entry/exit rules and a checklist (see [Setups and playbooks](#setups-and-playbooks)). Link trades, tick the criteria that were met, and see per-playbook stats and checklist adherence |
+| **Reports** | P&L, win rate and trade count by market (asset class), symbol (futures grouped by root), day of week, entry hour, holding time, long vs short, each tag and month |
 
-The **account** and **date range** filters in the sidebar apply to every page.
+The **account**, **market** and **date range** filters in the sidebar apply to every page.
 
 ## Quick start
 
@@ -29,13 +30,17 @@ Requires [uv](https://docs.astral.sh/uv/). uv installs Python 3.12 if you don't 
 ```bash
 git clone <this repo> trade-journal && cd trade-journal
 uv sync                         # create .venv and install dependencies
-uv run trade-journal-seed       # load ~200 sample trades, tags, playbooks and journal entries
+uv run trade-journal-seed       # load ~200 sample trades (TSLA, ES, EURUSD, XAUUSD, BTC…), playbooks, journal
 uv run streamlit run app/main.py
 ```
 
 Open http://localhost:8501. To start again from the sample data, run
 `uv run trade-journal-seed --reset` (this wipes the database). To start with an empty
-journal, skip the seed step; the app creates a default `Main` account in MYR.
+journal, skip the seed step; the app creates a default `Main` account (USD).
+
+> **Upgrading from an earlier build?** The schema changed (accounts lost their currency;
+> trades gained market and point value). Run `uv run trade-journal-seed --reset`, or
+> delete `data/journal.db`, before starting the app.
 
 ## Screenshots
 
@@ -43,7 +48,8 @@ journal, skip the seed step; the app creates a default `Main` account in MYR.
 |---|---|
 | ![Calendar](docs/screenshots/calendar.png) **Calendar** | ![Day details](docs/screenshots/calendar_day.png) **Clicking a day** |
 | ![Trade log](docs/screenshots/trade_log.png) **Trade log** | ![Trade detail](docs/screenshots/trade_detail.png) **Trade detail** |
-| ![Reports](docs/screenshots/reports_tags.png) **Reports: tags** | ![Playbooks](docs/screenshots/playbooks.png) **Playbooks** |
+| ![Reports by market](docs/screenshots/reports_markets.png) **Reports: by market** | ![Reports by tag](docs/screenshots/reports_tags.png) **Reports: setups, mistakes, emotions** |
+| ![Playbooks](docs/screenshots/playbooks.png) **Playbooks** | ![Instruments](docs/screenshots/instruments.png) **Settings: instruments and multipliers** |
 | ![Import](docs/screenshots/import_mapping.png) **CSV column mapping** | ![Journal](docs/screenshots/journal.png) **Daily journal** |
 
 ## CSV format
@@ -54,9 +60,9 @@ a broker preset so it's prefilled next time.
 
 | Field | Required | Notes |
 |---|---|---|
-| Symbol | yes | Upper-cased on import |
+| Symbol | yes | `TSLA`, `ESZ6`, `/MNQH7`, `EURUSD`, `EUR/USD`, `XAUUSD`, `BTCUSD`, `BTC-USDT`… normalised on import (see [Markets and instruments](#markets-and-instruments)) |
 | Side | yes | `buy`/`sell`, `long`/`short`, `B`/`S`, `BOT`/`SLD`, `BTO`/`STC`, `SS`… (case-insensitive) |
-| Quantity | yes | Thousands separators allowed; a negative quantity is treated as its absolute value |
+| Quantity | yes | Shares (stocks), contracts (futures), lots (forex and spot commodities) or coins (crypto). Thousands separators allowed; a negative quantity is treated as its absolute value |
 | Entry price | yes | The fill price for one-row-per-execution files |
 | Entry time | yes | Auto-detected, or give a `strftime` format such as `%d/%m/%Y %H:%M` |
 | Exit price | no | Map together with exit time for round-trip rows |
@@ -70,10 +76,13 @@ Two layouts are supported:
 
    ```csv
    Symbol,Action,Qty,Price,Time,Commission
-   MAYBANK,BUY,1000,10.20,2026-06-01 09:31:02,12.50
-   MAYBANK,BUY,1000,10.24,2026-06-01 09:33:40,12.50
-   MAYBANK,SELL,2000,10.40,2026-06-01 10:05:11,25.00
+   TSLA,BUY,100,431.20,2026-06-01 09:31:02,1.00
+   TSLA,BUY,100,429.80,2026-06-01 09:33:40,1.00
+   TSLA,SELL,200,436.15,2026-06-01 10:05:11,1.00
    ```
+
+   These three fills become **one TSLA trade**: long 200 shares, average entry 430.50,
+   exit 436.15, net P&L (436.15 − 430.50) × 200 − 3.00 = **+$1,127.00**.
 
 2. **One row per round trip.** Also map exit price and exit time. The side is the
    direction of the position (`Long`/`Buy` opens with a buy). A row with an empty
@@ -81,12 +90,19 @@ Two layouts are supported:
 
    ```csv
    Ticker,Direction,Qty,Entry Price,Open Time,Exit Price,Close Time,Commission
-   GAMUDA,Short,2000,5.110,2026-05-04 09:10:33,5.000,2026-05-04 09:17:33,44.24
+   TSLA,Short,150,438.40,2026-06-02 09:45:10,432.90,2026-06-02 10:20:41,2.00
+   ESU6,Long,2,6500.25,2026-06-02 10:02:00,6512.75,2026-06-02 11:15:30,9.00
+   EURUSD,Long,0.5,1.16520,2026-06-02 03:15:00,1.16810,2026-06-02 06:40:00,3.50
    ```
 
-`sample_data/sample_trades.csv` uses the second layout. It has 257 rows that group into
-207 trades, because some positions were scaled out of across several rows. It was made
-by `sample_data/generate_sample.py`.
+   That is +$823.00 on TSLA, +$1,241.00 on ES (12.5 points × 2 contracts × $50) and
+   +$141.50 on EURUSD (29 pips × 0.5 lot × $10), each after fees.
+
+`sample_data/sample_trades.csv` uses the second layout. It has 245 rows that group into
+207 trades across US stocks (TSLA is the most traded), futures (ES, MES, MNQ), commodities
+(CL, GC, XAUUSD), forex (EURUSD, GBPUSD, USDJPY) and crypto (BTCUSD, ETHUSD), because some
+positions were scaled out of across several rows. Times are US Eastern. It was made by
+`sample_data/generate_sample.py`.
 
 ### How trades are built
 
@@ -96,8 +112,8 @@ by `sample_data/generate_sample.py`.
   partial fills in between belong to one trade. A fill that flips the position (selling
   150 while long 100) is split: 100 closes the long, 50 opens a new short.
 * **Prices and P&L.** Average entry and exit are volume-weighted. Gross P&L is
-  (avg exit − avg entry) × closed quantity, sign-adjusted for shorts. Net P&L is gross
-  P&L minus all fees.
+  (avg exit − avg entry) × closed quantity × point value, sign-adjusted for shorts. Net
+  P&L is gross P&L minus all fees. All P&L is in USD.
 * **Open positions.** A trade that hasn't returned to flat is stored as *open* and
   **left out of every statistic**. If a later import closes it, the executions are
   added to the same trade, so its notes and tags are kept.
@@ -105,6 +121,48 @@ by `sample_data/generate_sample.py`.
   price, time, fees). Fingerprints that are already in the account are skipped, so
   re-importing an overlapping export is safe. Identical rows within one file are told
   apart by how many times they occur, so two genuine identical fills both import.
+
+## Markets and instruments
+
+Every trade is resolved to an instrument, which gives it a **market** (asset class) and a
+**point value**: the USD value of a 1.0 price move for one unit of quantity.
+
+| Market | Quantity unit | Point value | Examples |
+|---|---|---|---|
+| US stocks | shares | 1 | `TSLA`, `NVDA`, `AAPL`; any symbol not otherwise recognised |
+| Futures | contracts | contract multiplier | `ES` 50, `MES` 5, `NQ` 20, `MNQ` 2, `YM` 5, `RTY` 50, `ZN` 1,000, `6E` 125,000 |
+| Commodities | contracts (futures) or lots (spot) | contract/lot size | `CL` 1,000, `MCL` 100, `GC` 100, `MGC` 10, `SI` 5,000, `NG` 10,000, `XAUUSD` 100 oz, `XAGUSD` 5,000 oz, `USOIL` 1,000 bbl |
+| Forex | standard lots | 100,000 | `EURUSD`, `GBPUSD`, `AUDUSD`; `USDJPY`/`USDCAD`/`USDCHF` are converted to USD at the exit price |
+| Crypto | coins | 1 | `BTCUSD`, `ETHUSD`, `SOLUSD`; `BTCUSDT`/`BTC-USD` are normalised to `BTCUSD` |
+
+How a symbol is resolved:
+
+1. **Exact match** in the instrument table.
+2. **Futures contract code**: root + month code + year (`ESZ6`, `ESZ26`, `MNQH2027`)
+   resolves to the root (`ES`, `MNQ`). Each contract is still its own position, and
+   reports group contracts by root.
+3. **Forex pattern**: two ISO currency codes (`EURGBP`) → forex, 100,000 per lot.
+4. **Crypto pattern**: a known coin + `USD`/`USDT`/`USDC` → crypto, 1 per coin.
+5. Otherwise a **US stock** with point value 1.
+
+You can edit the table under **Settings → Instruments**. For example, set a forex
+multiplier to 1 if your broker exports units instead of lots, or add a contract. Saving
+recalculates the P&L of every stored trade from its executions.
+
+## Setups and playbooks
+
+The journal is built around three setups. Each one is a **Setup** tag and has a matching
+**playbook** with a description, entry/exit rules and a checklist. Ticking the checklist
+on a trade feeds the "followed the checklist?" comparison on the Playbooks page.
+
+| Setup / playbook | Idea | Checklist |
+|---|---|---|
+| **Golden Ratio - 0.618 retracement** | Buy (sell) the pullback to the 61.8% Fibonacci retracement of a clean impulse leg, with the higher-timeframe trend | HTF trend aligned · clean impulse leg with displacement · price reached the 0.618 / golden pocket · rejection candle at the level · stop beyond 0.786 · R:R ≥ 2 |
+| **Supply/Demand zone** | Trade the first return to a fresh zone created by a strong departure (rally-base-drop / drop-base-rally) | fresh, untested zone · strong departure from the base · zone aligned with HTF trend · ≥ 2R to the opposing zone · stop beyond the distal line |
+| **ICT - Liquidity Sweep + BOS + Imbalance** | After a sweep of buy-side/sell-side liquidity and a break of structure the other way, enter on the retrace into the fair value gap | liquidity swept (PDH/PDL, session high/low, equal highs/lows) · BOS with displacement · FVG left behind · entry in discount/premium · inside a killzone · stop beyond the sweep extreme |
+
+The full rules are seeded by `uv run trade-journal-seed` and can be edited on the
+Playbooks page.
 
 ## Metric definitions
 
@@ -123,7 +181,7 @@ in the current filter. Each one has unit tests in `tests/test_metrics.py`.
 | Avg win/loss ratio | average win ÷ average loss (∞ with no losses) |
 | Expectancy | win rate × average win − loss rate × average loss. This equals the mean net P&L per trade |
 | Max drawdown | Largest peak-to-trough fall of cumulative net P&L, starting from equity 0 |
-| R-multiple | net P&L ÷ (\|avg entry − stop loss\| × quantity). Only shown once a stop loss is set |
+| R-multiple | net P&L ÷ (\|avg entry − stop loss\| × quantity × point value). Only shown once a stop loss is set |
 | Holding time | exit time − entry time. Buckets: < 1 min, 1–5 min, 5–15 min, 15–60 min, 1–4 h, 4–24 h, 1–7 days, > 7 days |
 | Trade date | The exit date. The calendar, daily P&L and date filter use it (open trades use their entry date) |
 
@@ -163,13 +221,14 @@ app/                 Streamlit UI, one file per page
 core/
   models.py          SQLAlchemy 2.0 ORM models
   db.py              engine, sessions, init_db
+  instruments.py     markets, contract multipliers, symbol resolution (ESZ6 → ES)
   importer.py        CSV parsing, column mapping, duplicate detection, execution grouping
   metrics.py         all statistics as pure functions on DataFrames
   repository.py      loads trades from the DB into DataFrames
   trades.py          tags, screenshots, playbook links, deletion
   journal.py         journal entries and playbook definitions
   seed.py            `trade-journal-seed` command
-sample_data/         sample CSV (~200 trades) and its generator
+sample_data/         sample CSV (~200 USD trades across all five markets) and its generator
 tests/               pytest suite (metrics, import grouping, DB operations, page smoke tests)
 docs/screenshots/    images used in this README
 ```
@@ -199,8 +258,8 @@ pytest on every push and pull request.
 
 ## Limitations
 
-* Accounts with different currencies are summed **without FX conversion**. The app
-  warns you when the filter mixes currencies.
-* There is no contract multiplier, so futures and options P&L assume a multiplier of 1.
+* All accounts are USD. Forex crosses without USD (EURGBP, EURJPY) are left in their
+  quote currency, because converting them needs a second exchange rate.
+* Options are not modelled. An option symbol is treated as a stock with multiplier 1.
 * Grouping is per account and symbol, so two overlapping positions in the same symbol
   in one account are treated as one trade.

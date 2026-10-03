@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import select
 
-from app.common import currency_warning, db, fmt_money, get_filters, load_filtered_trades
+from app.common import db, fmt_money, get_filters, load_filtered_trades
 from core import metrics as m
 from core.models import JournalEntry
 
@@ -23,7 +23,6 @@ daily = m.daily_pnl(df)
 daily_by_date = daily.set_index("date") if not daily.empty else pd.DataFrame()
 
 st.title("Calendar")
-currency_warning(filters)
 
 # ------------------------------------------------------------------ month picker
 months = sorted({(d.year, d.month) for d in daily["date"]}) if not daily.empty else []

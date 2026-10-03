@@ -8,7 +8,6 @@ from sqlalchemy.orm import selectinload
 
 from app.charts import breakdown_bar_figure, equity_curve_figure
 from app.common import (
-    currency_warning,
     db,
     fmt_money,
     fmt_pct,
@@ -25,7 +24,6 @@ cur = filters.currency
 df = load_filtered_trades(filters)
 
 st.title("Playbooks")
-currency_warning(filters)
 
 with db() as s:
     playbooks = [

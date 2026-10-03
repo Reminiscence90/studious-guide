@@ -262,12 +262,14 @@ def test_breakdown_by_column() -> None:
 
 
 def test_breakdown_explodes_list_columns() -> None:
-    df = make_trades([100, -50, -30], tags=[["Breakout", "Calm"], ["Breakout"], []])
+    df = make_trades(
+        [100, -50, -30], tags=[["Supply/Demand zone", "Calm"], ["Supply/Demand zone"], []]
+    )
     out = m.breakdown(df, "tags", explode=True, sort_by="net_pnl").set_index("group")
-    assert out.loc["Breakout", "trades"] == 2
-    assert out.loc["Breakout", "net_pnl"] == 50
+    assert out.loc["Supply/Demand zone", "trades"] == 2
+    assert out.loc["Supply/Demand zone", "net_pnl"] == 50
     assert out.loc["Calm", "net_pnl"] == 100
-    assert list(out.index) == ["Calm", "Breakout"]
+    assert list(out.index) == ["Calm", "Supply/Demand zone"]
 
 
 def test_breakdown_keeps_category_order() -> None:
@@ -300,7 +302,7 @@ def test_month_grid() -> None:
 def test_rule_adherence_and_playbook_stats() -> None:
     df = make_trades(
         [100, -50, 30, 5],
-        playbook=["ORB", "ORB", "VWAP", None],
+        playbook=["ICT", "ICT", "Golden Ratio", None],
         checklist_total=[3, 3, 2, 0],
         checklist_met=[3, 1, 2, 0],
     )
@@ -310,5 +312,20 @@ def test_rule_adherence_and_playbook_stats() -> None:
     by_rules = m.breakdown(df, m.rule_adherence).set_index("group")
     assert by_rules.loc["All criteria met", "net_pnl"] == 130
     stats = m.playbook_stats(df)
-    assert stats["group"].tolist() == ["ORB", "VWAP"]  # sorted by net P&L
-    assert stats.set_index("group").loc["ORB", "win_rate"] == 0.5
+    assert stats["group"].tolist() == ["ICT", "Golden Ratio"]  # sorted by net P&L
+    assert stats.set_index("group").loc["ICT", "win_rate"] == 0.5
+
+
+def test_r_multiple_uses_point_value() -> None:
+    # 1 ES contract, stop 10 points away = $500 risk; +$1,000 = +2R
+    assert m.r_multiple(1000, 6500, 6490, 1, point_value=50) == pytest.approx(2)
+    df = pd.DataFrame(
+        {
+            "net_pnl": [1000.0],
+            "avg_entry_price": [6500.0],
+            "stop_loss": [6490.0],
+            "quantity": [1.0],
+            "point_value": [50.0],
+        }
+    )
+    assert m.r_multiples(df).iloc[0] == pytest.approx(2)

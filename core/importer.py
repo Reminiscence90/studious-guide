@@ -27,10 +27,19 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from core.instruments import (
+    AssetClass,
+    InstrumentSpec,
+    default_specs,
+    normalise_symbol,
+    point_value,
+    resolve,
+)
 from core.models import (
     BrokerPreset,
     Execution,
     ExecutionSide,
+    Instrument,
     Trade,
     TradeSide,
     TradeStatus,
@@ -117,8 +126,8 @@ class TradeGroup:
     def entry_side(self) -> ExecutionSide:
         return ExecutionSide.BUY if self.side is TradeSide.LONG else ExecutionSide.SELL
 
-    def summary(self) -> TradeSummary:
-        return summarize_fills(self.fills, self.side, self.is_closed)
+    def summary(self, spec: InstrumentSpec | None = None) -> TradeSummary:
+        return summarize_fills(self.fills, self.side, self.is_closed, spec)
 
 
 @dataclass(frozen=True)
@@ -133,6 +142,9 @@ class TradeSummary:
     fees: float
     gross_pnl: float
     net_pnl: float
+    instrument: str = ""
+    asset_class: AssetClass = AssetClass.STOCK
+    point_value: float = 1.0
 
 
 @dataclass
@@ -276,7 +288,7 @@ def rows_to_executions(
     for pos, (_, row) in enumerate(df.iterrows()):
         line = pos + 2  # header is line 1
         try:
-            symbol = str(col(row, "symbol")).strip().upper()
+            symbol = normalise_symbol(col(row, "symbol"))
             if not symbol or symbol == "NAN":
                 raise ImportError_("missing symbol")
             side = parse_side(col(row, "side"))
@@ -364,11 +376,18 @@ def group_executions(fills: Iterable[Fill]) -> list[TradeGroup]:
     return groups
 
 
-def summarize_fills(fills: Sequence[Fill], side: TradeSide, is_closed: bool) -> TradeSummary:
-    """Compute averages and P&L for a group of fills.
+def summarize_fills(
+    fills: Sequence[Fill],
+    side: TradeSide,
+    is_closed: bool,
+    spec: InstrumentSpec | None = None,
+) -> TradeSummary:
+    """Compute averages and P&L (in USD) for a group of fills.
 
     * quantity: total quantity opened (sum of entry-side fills)
-    * gross P&L: realised P&L on the closed quantity, using average entry price
+    * gross P&L: (avg exit − avg entry) × closed quantity × point value, sign-adjusted
+      for shorts. The point value comes from the instrument spec (contract
+      multiplier, forex lot size, USD conversion); it is 1 when no spec is given.
     * net P&L: gross P&L minus all fees
     """
     entry_side = ExecutionSide.BUY if side is TradeSide.LONG else ExecutionSide.SELL
@@ -379,7 +398,9 @@ def summarize_fills(fills: Sequence[Fill], side: TradeSide, is_closed: bool) -> 
     avg_entry = sum(f.quantity * f.price for f in entries) / entry_qty
     avg_exit = sum(f.quantity * f.price for f in exits) / exit_qty if exit_qty else None
     direction = 1.0 if side is TradeSide.LONG else -1.0
-    gross = (avg_exit - avg_entry) * exit_qty * direction if avg_exit is not None else 0.0
+    spec = spec or InstrumentSpec(fills[0].symbol, AssetClass.STOCK)
+    pv = point_value(spec, avg_exit if avg_exit is not None else avg_entry)
+    gross = (avg_exit - avg_entry) * exit_qty * direction * pv if avg_exit is not None else 0.0
     fees = sum(f.fees for f in fills)
     return TradeSummary(
         side=side,
@@ -392,6 +413,9 @@ def summarize_fills(fills: Sequence[Fill], side: TradeSide, is_closed: bool) -> 
         fees=fees,
         gross_pnl=round(gross, 10),
         net_pnl=round(gross - fees, 10),
+        instrument=spec.symbol,
+        asset_class=spec.asset_class,
+        point_value=pv,
     )
 
 
@@ -411,6 +435,67 @@ def _apply_summary(trade: Trade, summary: TradeSummary) -> None:
     trade.fees = summary.fees
     trade.gross_pnl = summary.gross_pnl
     trade.net_pnl = summary.net_pnl
+    trade.instrument = summary.instrument
+    trade.asset_class = summary.asset_class
+    trade.point_value = summary.point_value
+
+
+def load_specs(session: Session) -> dict[str, InstrumentSpec]:
+    """Instrument specs from the database (the built-in catalog if the table is empty)."""
+    specs = {
+        row.symbol: InstrumentSpec(
+            row.symbol, row.asset_class, row.multiplier, row.quote_currency, row.name
+        )
+        for row in session.scalars(select(Instrument))
+    }
+    return specs or default_specs()
+
+
+def replace_instruments(session: Session, specs: Sequence[InstrumentSpec]) -> None:
+    """Replace the instrument table with ``specs`` (symbols normalised, must be unique)."""
+    cleaned: dict[str, InstrumentSpec] = {}
+    for spec in specs:
+        symbol = normalise_symbol(spec.symbol)
+        if not symbol:
+            raise ValueError("Instrument symbol is empty")
+        if symbol in cleaned:
+            raise ValueError(f"Duplicate instrument {symbol!r}")
+        if spec.multiplier <= 0:
+            raise ValueError(f"Multiplier for {symbol} must be positive")
+        cleaned[symbol] = replace(spec, symbol=symbol, quote_currency=spec.quote_currency.upper())
+    for row in session.scalars(select(Instrument)):
+        session.delete(row)
+    session.flush()
+    session.add_all(
+        Instrument(
+            symbol=s.symbol,
+            name=s.name,
+            asset_class=s.asset_class,
+            multiplier=s.multiplier,
+            quote_currency=s.quote_currency,
+        )
+        for s in cleaned.values()
+    )
+    session.flush()
+
+
+def recalculate_trades(session: Session) -> int:
+    """Recompute every trade's P&L from its executions with the current instrument specs.
+
+    Use after changing a multiplier. Returns the number of trades updated.
+    """
+    specs = load_specs(session)
+    trades = session.scalars(select(Trade)).all()
+    for trade in trades:
+        fills = [_fill_from_execution(e) for e in trade.executions]
+        if not fills:
+            continue
+        is_closed = trade.status is TradeStatus.CLOSED
+        _apply_summary(
+            trade, summarize_fills(fills, trade.side, is_closed, resolve(trade.symbol, specs))
+        )
+    session.flush()
+    return len(trades)
 
 
 def _fill_from_execution(e: Execution) -> Fill:
@@ -430,6 +515,7 @@ def import_fills(
     one becomes a single trade.
     """
     result = ImportResult()
+    fills = [replace(f, symbol=normalise_symbol(f.symbol)) for f in fills]
     fills = assign_fingerprints(account_id, fills)
     hashes = [f.import_hash for f in fills]
     existing: set[str] = set()
@@ -451,6 +537,7 @@ def import_fills(
     by_symbol: dict[str, list[Fill]] = defaultdict(list)
     for f in new_fills:
         by_symbol[f.symbol].append(f)
+    specs = load_specs(session)
 
     for symbol, sym_fills in by_symbol.items():
         open_trade = session.scalars(
@@ -471,7 +558,7 @@ def import_fills(
             session.flush()
 
         for i, group in enumerate(group_executions(prior + sym_fills)):
-            summary = group.summary()
+            summary = group.summary(resolve(symbol, specs))
             if i == 0 and open_trade is not None:
                 trade = open_trade
                 result.trades_updated += 1
@@ -538,7 +625,7 @@ def add_manual_trade(
         raise ImportError_("Provide both exit price and exit time, or neither")
     if exit_time is not None and exit_time < entry_time:
         raise ImportError_("Exit time is before entry time")
-    symbol = symbol.strip().upper()
+    symbol = normalise_symbol(symbol)
     if not symbol:
         raise ImportError_("Symbol is required")
     entry_side = ExecutionSide.BUY if side is TradeSide.LONG else ExecutionSide.SELL

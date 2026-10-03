@@ -5,14 +5,14 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.common import currency_warning, fmt_money, get_filters, load_filtered_trades
+from app.common import fmt_money, get_filters, load_filtered_trades
 from core import metrics as m
+from core.instruments import AssetClass
 
 filters = get_filters()
 df = load_filtered_trades(filters)
 
 st.title("Trade log")
-currency_warning(filters)
 
 if df.empty:
     st.info("No trades in this range. Import trades or widen the date filter.")
@@ -21,7 +21,7 @@ if df.empty:
 # ------------------------------------------------------------------ filters
 with st.container(border=True):
     c1, c2, c3, c4 = st.columns(4)
-    symbols = c1.multiselect("Symbol", sorted(df["symbol"].unique()))
+    symbols = c1.multiselect("Instrument", sorted(df["instrument"].unique()))
     side = c2.segmented_control("Side", ["long", "short"], selection_mode="multi")
     status = c3.segmented_control(
         "Status", ["closed", "open"], selection_mode="multi", default=["closed", "open"]
@@ -35,7 +35,7 @@ with st.container(border=True):
 
 mask = pd.Series(True, index=df.index)
 if symbols:
-    mask &= df["symbol"].isin(symbols)
+    mask &= df["instrument"].isin(symbols)
 if side:
     mask &= df["side"].isin(side)
 if status:
@@ -60,10 +60,11 @@ st.caption(
 )
 
 table = view[
-    ["id", "symbol", "side", "status", "entry_time", "exit_time", "quantity", "avg_entry_price",
-     "avg_exit_price", "net_pnl", "r_multiple", "holding_minutes", "setups", "mistakes",
-     "emotions", "playbook", "account"]
+    ["id", "symbol", "asset_class", "side", "status", "entry_time", "exit_time", "quantity",
+     "avg_entry_price", "avg_exit_price", "net_pnl", "r_multiple", "holding_minutes", "setups",
+     "mistakes", "emotions", "playbook", "account"]
 ].reset_index(drop=True)  # fmt: skip
+table["asset_class"] = table["asset_class"].map(lambda v: AssetClass(v).label)
 
 event = st.dataframe(
     table,
@@ -79,9 +80,10 @@ event = st.dataframe(
         "status": "Status",
         "entry_time": st.column_config.DatetimeColumn("Entry", format="YYYY-MM-DD HH:mm"),
         "exit_time": st.column_config.DatetimeColumn("Exit", format="YYYY-MM-DD HH:mm"),
-        "quantity": st.column_config.NumberColumn("Qty", format="%.0f"),
-        "avg_entry_price": st.column_config.NumberColumn("Entry px", format="%.3f"),
-        "avg_exit_price": st.column_config.NumberColumn("Exit px", format="%.3f"),
+        "asset_class": "Market",
+        "quantity": st.column_config.NumberColumn("Qty"),
+        "avg_entry_price": st.column_config.NumberColumn("Entry px"),
+        "avg_exit_price": st.column_config.NumberColumn("Exit px"),
         "net_pnl": st.column_config.NumberColumn("Net P&L", format="%+.2f"),
         "r_multiple": st.column_config.NumberColumn("R", format="%+.2f"),
         "holding_minutes": st.column_config.NumberColumn("Hold (min)", format="%.0f"),

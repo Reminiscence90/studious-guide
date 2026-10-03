@@ -44,11 +44,11 @@ def test_set_trade_tags_replaces_per_category_and_creates_custom(
     set_trade_tags(
         session,
         trade,
-        {TagCategory.SETUP: ["Breakout"], TagCategory.EMOTION: ["Calm", "Zen", "Zen"]},
+        {TagCategory.SETUP: ["Supply/Demand zone"], TagCategory.EMOTION: ["Calm", "Zen", "Zen"]},
     )
-    assert sorted(t.name for t in trade.tags) == ["Breakout", "Calm", "Zen"]
-    set_trade_tags(session, trade, {TagCategory.SETUP: ["Pullback"]})
-    assert sorted(t.name for t in trade.tags) == ["Calm", "Pullback", "Zen"]
+    assert sorted(t.name for t in trade.tags) == ["Calm", "Supply/Demand zone", "Zen"]
+    set_trade_tags(session, trade, {TagCategory.SETUP: ["Golden Ratio - 0.618 retracement"]})
+    assert sorted(t.name for t in trade.tags) == ["Calm", "Golden Ratio - 0.618 retracement", "Zen"]
     zen = session.scalars(select(Tag).where(Tag.name == "Zen")).one()
     assert zen.category is TagCategory.EMOTION
 

@@ -56,3 +56,11 @@ def test_date_filter_applies(seeded_db: None) -> None:
     at.selectbox(key="filter_preset").select("Last 30 days").run()
     total_30 = next(mt.value for mt in at.metric if mt.label == "Total trades")
     assert int(total_30) < int(total_all)
+
+
+def test_markets_filter_applies(seeded_db: None) -> None:
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    total_all = int(next(mt.value for mt in at.metric if mt.label == "Total trades"))
+    at.multiselect(key="filter_assets").select("forex").run()
+    total_fx = int(next(mt.value for mt in at.metric if mt.label == "Total trades"))
+    assert 0 < total_fx < total_all

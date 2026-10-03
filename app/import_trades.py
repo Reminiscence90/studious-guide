@@ -31,7 +31,7 @@ account_by_id = {a.id: a for a in all_accounts}
 account_id = st.selectbox(
     "Import into account",
     options=list(account_by_id),
-    format_func=lambda i: f"{account_by_id[i].name} ({account_by_id[i].currency})",
+    format_func=lambda i: account_by_id[i].name,
 )
 
 csv_tab, manual_tab = st.tabs(["📄 CSV import", "✍️ Manual entry"])
@@ -90,7 +90,9 @@ with csv_tab:
 
         save_col, import_col = st.columns(2)
         with save_col:
-            new_preset = st.text_input("Save mapping as preset", placeholder="e.g. Rakuten Trade")
+            new_preset = st.text_input(
+                "Save mapping as preset", placeholder="e.g. Interactive Brokers"
+            )
             if st.button("💾 Save preset", disabled=bool(problems) or not new_preset.strip()):
                 with db() as s:
                     save_preset(s, new_preset.strip(), mapping, dt_format.strip() or None)
@@ -120,25 +122,38 @@ with csv_tab:
 with manual_tab:
     with st.form("manual_trade", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
-        symbol = c1.text_input("Symbol *")
+        symbol = c1.text_input(
+            "Symbol *",
+            placeholder="TSLA, ESZ6, EURUSD, XAUUSD, BTCUSD…",
+            help="Futures contract codes resolve to their root (ESZ6 → ES, $50/point). "
+            "Multipliers are set under Settings → Instruments.",
+        )
         side = c2.radio("Side", [TradeSide.LONG, TradeSide.SHORT], horizontal=True,
                         format_func=lambda s: s.value.title())  # fmt: skip
-        quantity = c3.number_input("Quantity *", min_value=0.0, step=100.0, value=100.0)
+        quantity = c3.number_input(
+            "Quantity *",
+            min_value=0.0,
+            step=1.0,
+            value=100.0,
+            format="%g",
+            help="Shares (stocks), contracts (futures), lots (forex / spot commodities) "
+            "or coins (crypto).",
+        )
 
         c1, c2, c3 = st.columns(3)
-        entry_price = c1.number_input("Entry price *", min_value=0.0, format="%.4f")
+        entry_price = c1.number_input("Entry price *", min_value=0.0, format="%.5f")
         entry_date = c2.date_input("Entry date")
         entry_tm = c3.time_input("Entry time", value=time(9, 30), step=60)
 
         closed = st.checkbox("Position is closed", value=True)
         c1, c2, c3 = st.columns(3)
-        exit_price = c1.number_input("Exit price", min_value=0.0, format="%.4f")
+        exit_price = c1.number_input("Exit price", min_value=0.0, format="%.5f")
         exit_date = c2.date_input("Exit date")
         exit_tm = c3.time_input("Exit time", value=time(10, 0), step=60)
 
         c1, c2 = st.columns(2)
         fees = c1.number_input("Fees", min_value=0.0, format="%.2f")
-        stop = c2.number_input("Stop loss (optional, 0 = none)", min_value=0.0, format="%.4f")
+        stop = c2.number_input("Stop loss (optional, 0 = none)", min_value=0.0, format="%.5f")
         notes = st.text_area("Notes (markdown)")
         submitted = st.form_submit_button("Add trade", type="primary")
 

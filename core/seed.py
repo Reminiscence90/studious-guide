@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from core.db import PROJECT_ROOT, get_engine, init_db
 from core.importer import guess_mapping, import_dataframe, save_preset
+from core.instruments import AssetClass
 from core.models import (
     Account,
     Base,
@@ -42,66 +43,100 @@ SAMPLE_CSV = PROJECT_ROOT / "sample_data" / "sample_trades.csv"
 
 PLAYBOOKS = [
     {
-        "name": "Opening Range Breakout",
-        "description": "Trade the break of the first 15-minute range on strong relative volume.",
-        "entry_rules": "- Mark the 9:00–9:15 high/low\n- Enter on a 5-min close outside the range"
-        "\n- Volume above 1.5× average",
-        "exit_rules": "- Stop on the other side of the range midpoint\n- Scale out at 1R and 2R"
-        "\n- Exit remainder by 12:30",
+        "name": "Golden Ratio - 0.618 retracement",
+        "description": "Buy (sell) the pullback to the 61.8% Fibonacci retracement of a clean "
+        "impulse leg, in the direction of the higher-timeframe trend.",
+        "entry_rules": "- Higher-timeframe (4H/1H) trend is clear\n"
+        "- Identify a clean impulse leg with displacement on the 15m/1H\n"
+        "- Draw the Fibonacci from swing low to swing high (longs) or high to low (shorts)\n"
+        "- Wait for price to reach the 0.618 level (golden pocket 0.618–0.65)\n"
+        "- Enter on a rejection candle (pin bar / engulfing) at the level",
+        "exit_rules": "- Stop beyond the 0.786 retracement (or the swing origin)\n"
+        "- TP1 at the prior swing high/low (0.0 level), move stop to breakeven\n"
+        "- TP2 at the −0.272 extension",
         "checklist": [
-            "Clear 15-min opening range",
-            "Relative volume > 1.5×",
-            "Sector moving in the same direction",
-            "Stop placed before entry",
+            "Higher-timeframe trend aligned",
+            "Clean impulse leg with displacement",
+            "Price reached the 0.618 / golden pocket",
+            "Rejection candle confirmed at the level",
+            "Stop beyond 0.786",
+            "Reward-to-risk at least 2:1",
         ],
-        "setups": {"Breakout", "Gap and Go"},
     },
     {
-        "name": "Pullback to VWAP",
-        "description": "Join an established intraday trend on a pullback to VWAP.",
-        "entry_rules": "- Price trending above (long) / below (short) VWAP\n- Enter on the first "
-        "rejection candle at VWAP",
-        "exit_rules": "- Stop beyond the rejection candle\n- Target prior high/low of day",
+        "name": "Supply/Demand zone",
+        "description": "Trade the first return to a fresh supply or demand zone created by a "
+        "strong departure (rally-base-drop / drop-base-rally).",
+        "entry_rules": "- Mark the base candles before a strong, imbalanced departure\n"
+        "- Zone must be fresh (not yet retested)\n"
+        "- Prefer zones aligned with the higher-timeframe trend\n"
+        "- Enter at the proximal line, or on a lower-timeframe confirmation inside the zone",
+        "exit_rules": "- Stop beyond the distal line plus a small buffer\n"
+        "- Target the opposing supply/demand zone\n"
+        "- Take partials at 2R",
         "checklist": [
-            "Trend established for 30+ minutes",
-            "Pullback on lighter volume",
-            "Rejection candle at VWAP",
-            "Risk under 1% of account",
+            "Fresh, untested zone",
+            "Strong departure from the base",
+            "Zone aligned with higher-timeframe trend",
+            "Room to the opposing zone of 2R or more",
+            "Stop beyond the distal line",
         ],
-        "setups": {"Pullback", "VWAP Bounce"},
     },
     {
-        "name": "Failed Breakdown Reversal",
-        "description": "Fade a failed break of a key level when sellers/buyers get trapped.",
-        "entry_rules": "- Key daily level breaks then reclaims within 15 minutes\n- Enter on "
-        "reclaim with volume",
-        "exit_rules": "- Stop under the failed-break low\n- Target the opposite side of the range",
+        "name": "ICT - Liquidity Sweep + BOS + Imbalance",
+        "description": "Wait for a sweep of buy-side or sell-side liquidity, a break of "
+        "structure the other way, then enter on the retrace into the imbalance (FVG) left "
+        "by the displacement.",
+        "entry_rules": "- Mark the liquidity: previous day high/low, session highs/lows, "
+        "equal highs/lows\n"
+        "- Wait for price to sweep that liquidity\n"
+        "- Confirm a break of structure (BOS / MSS) with displacement in the opposite "
+        "direction\n"
+        "- Enter on the retrace into the fair value gap (imbalance), in discount for longs "
+        "or premium for shorts\n"
+        "- Prefer the London or New York AM killzone",
+        "exit_rules": "- Stop beyond the sweep extreme\n"
+        "- Target the opposing liquidity pool (draw on liquidity)\n"
+        "- Take partials at 2R, trail behind new structure",
         "checklist": [
-            "Key daily level identified pre-market",
-            "Reclaim within 15 minutes",
-            "Volume spike on reclaim",
+            "Liquidity swept (PDH/PDL, session high/low, equal highs/lows)",
+            "Break of structure with displacement",
+            "Fair value gap / imbalance left behind",
+            "Entry in discount (longs) or premium (shorts)",
+            "Entry inside a killzone",
+            "Stop beyond the sweep extreme",
         ],
-        "setups": {"Reversal"},
     },
 ]
 
 PLANS = [
-    "Focus on banks — watch MAYBANK and CIMB for opening range breaks. Max 3 trades.",
-    "Choppy futures overnight. Only A+ setups, half size until 10:30.",
-    "Tech names gapping up on US semis strength. Watch INARI for gap-and-go.",
-    "Utilities strong into results. Look for VWAP pullbacks in TENAGA / YTLPOWR.",
-    "No news catalysts. Patience — wait for the first 15-minute range to form.",
+    "TSLA gapping up pre-market on delivery numbers. Watch for a liquidity sweep of the "
+    "pre-market high, then BOS for a short. Max 3 trades.",
+    "CPI at 8:30. No trades until 9:45. ES and MNQ: look for 0.618 pullbacks in the trend.",
+    "EURUSD at a fresh 4H demand zone. Wait for a London killzone reaction.",
+    "Gold (XAUUSD) ranging under supply. Only short from the zone, stop above the distal line.",
+    "BTC swept last week's low overnight. Looking for BOS + FVG entry on the 15m.",
+    "Choppy, low-volume session expected. Half size, A+ setups only.",
 ]
 REVIEWS_GOOD = [
-    "Followed the plan, sized correctly and let winners work.",
-    "Good patience waiting for confirmation. Scaled out well.",
+    "Followed the plan, waited for confirmation at the level and let the runner work.",
+    "Good patience on the sweep — entered in the FVG instead of chasing the BOS candle.",
     "Stuck to A+ setups only. Happy with execution today.",
 ]
 REVIEWS_BAD = [
-    "Chased the first move and got stopped. Need to wait for the range.",
-    "Moved my stop on the second trade — that turned a small loss into a big one.",
-    "Overtraded in the afternoon session after an early loss.",
+    "Chased TSLA after the first move instead of waiting for the retracement.",
+    "Moved my stop on the second trade — that turned a 1R loss into 2.5R.",
+    "Traded a zone that had already been tested twice. Overtraded after an early loss.",
 ]
+
+# Typical stop distance as a fraction of price, by asset class (demo data only).
+STOP_DISTANCE = {
+    AssetClass.STOCK: 0.009,
+    AssetClass.FUTURE: 0.0025,
+    AssetClass.COMMODITY: 0.0035,
+    AssetClass.FOREX: 0.0017,
+    AssetClass.CRYPTO: 0.008,
+}
 
 
 def _reset(engine: Engine) -> None:
@@ -123,9 +158,9 @@ def seed(engine: Engine | None = None, *, reset: bool = False, rng_seed: int = 7
             )
         account = session.scalars(select(Account).order_by(Account.id)).first()
         assert account is not None
-        account.name = "Bursa Demo"
+        account.name = "Demo (USD)"
 
-        df = pd.read_csv(SAMPLE_CSV)
+        df = pd.read_csv(SAMPLE_CSV, dtype=str, keep_default_na=False)
         mapping = guess_mapping(df.columns)
         save_preset(session, "Sample broker (Ticker/Direction/Open Time)", mapping)
         import_dataframe(session, account.id, df, mapping)
@@ -142,8 +177,9 @@ def seed(engine: Engine | None = None, *, reset: bool = False, rng_seed: int = 7
         return len(trades)
 
 
-def _create_playbooks(session: Session) -> list[tuple[Playbook, set[str]]]:
-    result = []
+def _create_playbooks(session: Session) -> dict[str, Playbook]:
+    """Create one playbook per setup; the playbook name equals the setup tag name."""
+    result: dict[str, Playbook] = {}
     for spec in PLAYBOOKS:
         pb = Playbook(
             name=spec["name"],
@@ -155,7 +191,7 @@ def _create_playbooks(session: Session) -> list[tuple[Playbook, set[str]]]:
             PlaybookChecklistItem(text=text, position=i) for i, text in enumerate(spec["checklist"])
         ]
         session.add(pb)
-        result.append((pb, set(spec["setups"])))
+        result[spec["name"]] = pb
     session.flush()
     return result
 
@@ -164,7 +200,7 @@ def _seed_trade(
     rng: random.Random,
     trade: Trade,
     tags: dict[tuple[TagCategory, str], Tag],
-    playbooks: list[tuple[Playbook, set[str]]],
+    playbooks: dict[str, Playbook],
 ) -> None:
     is_win = trade.net_pnl > 0
     swing = (
@@ -173,13 +209,14 @@ def _seed_trade(
 
     # Stop loss on most trades so R-multiples are available.
     if rng.random() < 0.85:
-        risk = rng.uniform(0.008, 0.02) if not swing else rng.uniform(0.025, 0.045)
+        risk = STOP_DISTANCE[trade.asset_class] * rng.uniform(0.7, 1.4) * (2.5 if swing else 1)
         sign = -1 if trade.side is TradeSide.LONG else 1
-        trade.stop_loss = round(trade.avg_entry_price * (1 + sign * risk), 3)
+        decimals = 5 if trade.avg_entry_price < 10 else 3 if trade.avg_entry_price < 200 else 2
+        trade.stop_loss = round(trade.avg_entry_price * (1 + sign * risk), decimals)
 
-    # One setup per trade; winners lean toward breakouts and pullbacks.
-    setup_names = ["Breakout", "Pullback", "Reversal", "Gap and Go", "VWAP Bounce"]
-    weights = [4, 4, 1, 2, 3] if is_win else [3, 2, 3, 2, 2]
+    # One setup per trade; the ICT model has the best edge in the demo data.
+    setup_names = list(playbooks)
+    weights = [3, 2, 4] if is_win else [3, 4, 2]
     setup = rng.choices(setup_names, weights=weights)[0]
     trade.tags.append(tags[(TagCategory.SETUP, setup)])
 
@@ -196,15 +233,14 @@ def _seed_trade(
         trade.tags.append(tags[(TagCategory.EMOTION, rng.choices(emotions, emotion_weights)[0])])
 
     # Link most trades to the matching playbook and record the checklist.
-    for playbook, setups in playbooks:
-        if setup in setups and rng.random() < 0.8:
-            trade.playbook = playbook
-            p_met = 0.85 if is_win else 0.55
-            trade.checklist_results = [
-                TradeChecklistResult(item_id=item.id, met=rng.random() < p_met)
-                for item in playbook.checklist_items
-            ]
-            break
+    if rng.random() < 0.85:
+        playbook = playbooks[setup]
+        trade.playbook = playbook
+        p_met = 0.85 if is_win else 0.55
+        trade.checklist_results = [
+            TradeChecklistResult(item_id=item.id, met=rng.random() < p_met)
+            for item in playbook.checklist_items
+        ]
 
     if rng.random() < 0.25:
         trade.notes = (

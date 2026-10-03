@@ -8,9 +8,18 @@ import streamlit as st
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.common import db, fmt_money, get_filters, load_filtered_trades, pnl_color
+from app.common import (
+    db,
+    fmt_money,
+    fmt_price,
+    fmt_qty,
+    get_filters,
+    load_filtered_trades,
+    pnl_color,
+)
 from core import metrics as m
 from core.db import SCREENSHOT_DIR
+from core.instruments import ACCOUNT_CURRENCY, AssetClass
 from core.models import Playbook, Screenshot, Tag, TagCategory, Trade, TradeStatus
 from core.trades import (
     add_screenshot,
@@ -20,6 +29,14 @@ from core.trades import (
     set_playbook,
     set_trade_tags,
 )
+
+QTY_HELP = {
+    AssetClass.STOCK: "Shares",
+    AssetClass.FUTURE: "Contracts",
+    AssetClass.FOREX: "Lots",
+    AssetClass.COMMODITY: "Contracts (futures) or lots (spot)",
+    AssetClass.CRYPTO: "Coins",
+}
 
 filters = get_filters()
 all_trades = load_filtered_trades(filters).sort_values("entry_time", ascending=False)
@@ -81,10 +98,12 @@ with db() as s:
         (e.timestamp, e.side.value, e.quantity, e.price, e.fees, e.source) for e in trade.executions
     ]
 
-cur = trade.account.currency
+cur = ACCOUNT_CURRENCY
 is_open = trade.status is TradeStatus.OPEN
 holding = (trade.exit_time - trade.entry_time) if trade.exit_time else None
-r_mult = m.r_multiple(trade.net_pnl, trade.avg_entry_price, trade.stop_loss, trade.quantity)
+r_mult = m.r_multiple(
+    trade.net_pnl, trade.avg_entry_price, trade.stop_loss, trade.quantity, trade.point_value
+)
 
 # ------------------------------------------------------------------ header
 color = pnl_color(trade.net_pnl)
@@ -93,6 +112,10 @@ st.html(
     f"<span style='font-size:2rem;font-weight:700'>{trade.symbol}</span>"
     f"<span style='padding:2px 10px;border-radius:12px;border:1px solid {color}'>"
     f"{trade.side.value.upper()}</span>"
+    f"<span style='padding:2px 10px;border-radius:12px;border:1px solid rgba(128,128,128,.5)'>"
+    f"{trade.asset_class.label}"
+    + (f" · {trade.instrument} ×{trade.point_value:,.6g}" if trade.point_value != 1 else "")
+    + "</span>"
     f"<span style='opacity:.7'>{trade.status.value} · {trade.account.name}</span>"
     f"<span style='font-size:1.6rem;font-weight:600;color:{color}'>"
     f"{fmt_money(trade.net_pnl, cur)}</span>"
@@ -101,9 +124,9 @@ st.html(
 )
 
 c = st.columns(4)
-c[0].metric("Quantity", f"{trade.quantity:,.0f}")
-c[1].metric("Avg entry", f"{trade.avg_entry_price:,.4f}")
-c[2].metric("Avg exit", "–" if trade.avg_exit_price is None else f"{trade.avg_exit_price:,.4f}")
+c[0].metric("Quantity", fmt_qty(trade.quantity), help=QTY_HELP[trade.asset_class])
+c[1].metric("Avg entry", fmt_price(trade.avg_entry_price))
+c[2].metric("Avg exit", fmt_price(trade.avg_exit_price))
 c[3].metric("R-multiple", "–" if r_mult is None else f"{r_mult:+.2f}R",
             help="Net P&L ÷ (|entry − stop| × quantity). Set a stop loss to enable.")  # fmt: skip
 c = st.columns(4)
@@ -209,7 +232,7 @@ with right:
                 obj.stop_loss = stop or None
             st.rerun()
     if trade.stop_loss:
-        risk = abs(trade.avg_entry_price - trade.stop_loss) * trade.quantity
+        risk = abs(trade.avg_entry_price - trade.stop_loss) * trade.quantity * trade.point_value
         st.caption(f"Initial risk: {fmt_money(risk, cur, signed=False)}")
 
     st.subheader("Playbook")

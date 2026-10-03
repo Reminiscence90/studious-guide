@@ -6,8 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from app.charts import breakdown_bar_figure
-from app.common import currency_warning, fmt_money, get_filters, load_filtered_trades
+from app.common import fmt_money, get_filters, load_filtered_trades
 from core import metrics as m
+from core.instruments import AssetClass
 
 filters = get_filters()
 cur = filters.currency
@@ -16,7 +17,6 @@ closed = m.closed_trades(df)
 
 st.title("Reports")
 st.caption(f"{filters.label} · {len(closed)} closed trades · amounts in {cur}")
-currency_warning(filters)
 
 if closed.empty:
     st.info("No closed trades in this range.")
@@ -54,31 +54,39 @@ def show(table: pd.DataFrame, label: str, *, horizontal: bool = False, key: str)
 
 
 tabs = st.tabs(
-    ["Symbol", "Day of week", "Hour of day", "Holding time", "Long vs short", "Tags", "Month"]
-)
+    ["Market", "Symbol", "Day of week", "Hour of day", "Holding time", "Long vs short", "Tags",
+     "Month"]
+)  # fmt: skip
 
 with tabs[0]:
-    show(m.breakdown(closed, "symbol", sort_by="net_pnl"), "Symbol", horizontal=True, key="sym")
+    markets = m.breakdown(closed, "asset_class", sort_by="net_pnl")
+    markets["group"] = markets["group"].map(lambda v: AssetClass(v).label)
+    show(markets, "Market", horizontal=True, key="market")
+    st.caption("US stocks, futures, forex, commodities and crypto.")
 
 with tabs[1]:
+    show(m.breakdown(closed, "instrument", sort_by="net_pnl"), "Symbol", horizontal=True, key="sym")
+    st.caption("Futures contracts are grouped by root (ESM6 and ESU6 count as ES).")
+
+with tabs[2]:
     show(m.breakdown(closed, "weekday"), "Day of week", key="dow")
     st.caption("By entry day.")
 
-with tabs[2]:
+with tabs[3]:
     by_hour = m.breakdown(closed, "hour")
     by_hour["group"] = by_hour["group"].map(lambda h: f"{int(h):02d}:00")
     show(by_hour, "Entry hour", key="hour")
-    st.caption("By the hour the position was opened.")
-
-with tabs[3]:
-    show(m.breakdown(closed, "holding_bucket"), "Holding time", key="hold")
+    st.caption("By the hour the position was opened (US Eastern time in the sample data).")
 
 with tabs[4]:
+    show(m.breakdown(closed, "holding_bucket"), "Holding time", key="hold")
+
+with tabs[5]:
     sides = m.breakdown(closed, "side")
     sides["group"] = sides["group"].str.title()
     show(sides, "Side", key="side")
 
-with tabs[5]:
+with tabs[6]:
     setups = m.breakdown(closed, "setups", explode=True, sort_by="net_pnl")
     mistakes = m.breakdown(closed, "mistakes", explode=True, sort_by="net_pnl", ascending=True)
     emotions = m.breakdown(closed, "emotions", explode=True, sort_by="net_pnl")
@@ -111,6 +119,6 @@ with tabs[5]:
     st.subheader("Emotions")
     show(emotions, "Emotion", horizontal=True, key="emotions")
 
-with tabs[6]:
+with tabs[7]:
     show(m.breakdown(closed, "month"), "Month", key="month")
     st.caption("By exit month.")

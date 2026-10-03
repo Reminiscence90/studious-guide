@@ -27,6 +27,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from core.instruments import AssetClass
+
 
 class Base(DeclarativeBase):
     """Declarative base for all models."""
@@ -62,11 +64,12 @@ trade_tags = Table(
 
 
 class Account(Base):
+    """A trading account. All accounts are denominated in USD."""
+
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
-    currency: Mapped[str] = mapped_column(String(3), default="MYR")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     trades: Mapped[list[Trade]] = relationship(
@@ -77,7 +80,21 @@ class Account(Base):
     )
 
     def __repr__(self) -> str:
-        return f"Account(id={self.id}, name={self.name!r}, currency={self.currency!r})"
+        return f"Account(id={self.id}, name={self.name!r})"
+
+
+class Instrument(Base):
+    """Contract spec for a symbol or futures root (see ``core.instruments``)."""
+
+    __tablename__ = "instruments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(100), default="")
+    asset_class: Mapped[AssetClass] = mapped_column(Enum(AssetClass, native_enum=False))
+    # USD (or quote currency) value of a 1.0 price move for one unit of quantity.
+    multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    quote_currency: Mapped[str] = mapped_column(String(4), default="USD")
 
 
 class BrokerPreset(Base):
@@ -101,6 +118,13 @@ class Trade(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
     symbol: Mapped[str] = mapped_column(String(32), index=True)
+    # Instrument the symbol resolved to, e.g. "ES" for the contract "ESZ6".
+    instrument: Mapped[str] = mapped_column(String(32), default="")
+    asset_class: Mapped[AssetClass] = mapped_column(
+        Enum(AssetClass, native_enum=False), default=AssetClass.STOCK
+    )
+    # USD per 1.0 price move per unit of quantity, used for P&L and R-multiples.
+    point_value: Mapped[float] = mapped_column(Float, default=1.0)
     side: Mapped[TradeSide] = mapped_column(Enum(TradeSide, native_enum=False))
     status: Mapped[TradeStatus] = mapped_column(Enum(TradeStatus, native_enum=False))
     quantity: Mapped[float] = mapped_column(Float)
@@ -250,7 +274,11 @@ class TradeChecklistResult(Base):
 
 
 DEFAULT_TAGS: dict[TagCategory, list[str]] = {
-    TagCategory.SETUP: ["Breakout", "Pullback", "Reversal", "Gap and Go", "VWAP Bounce"],
+    TagCategory.SETUP: [
+        "Golden Ratio - 0.618 retracement",
+        "Supply/Demand zone",
+        "ICT - Liquidity Sweep + BOS + Imbalance",
+    ],
     TagCategory.MISTAKE: ["FOMO entry", "Moved stop", "Oversized", "Early exit", "No plan"],
     TagCategory.EMOTION: ["Confident", "Anxious", "Greedy", "Calm", "Frustrated"],
 }

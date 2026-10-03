@@ -11,7 +11,8 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from core.models import DEFAULT_TAGS, Account, Base, Tag
+from core.instruments import DEFAULT_INSTRUMENTS
+from core.models import DEFAULT_TAGS, Account, Base, Instrument, Tag
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("TRADE_JOURNAL_DATA_DIR", PROJECT_ROOT / "data"))
@@ -46,15 +47,26 @@ def _engine_for(url: str) -> Engine:
 
 
 def init_db(engine: Engine | None = None) -> Engine:
-    """Create tables and default rows (a default MYR account and the default tags)."""
+    """Create tables and default rows: a USD account, the default tags and instrument specs."""
     engine = engine or get_engine()
     Base.metadata.create_all(engine)
     with Session(engine) as session:
         if session.scalar(select(Account.id).limit(1)) is None:
-            session.add(Account(name="Main", currency="MYR"))
+            session.add(Account(name="Main"))
         if session.scalar(select(Tag.id).limit(1)) is None:
             for category, names in DEFAULT_TAGS.items():
                 session.add_all(Tag(name=name, category=category) for name in names)
+        if session.scalar(select(Instrument.id).limit(1)) is None:
+            session.add_all(
+                Instrument(
+                    symbol=spec.symbol,
+                    name=spec.name,
+                    asset_class=spec.asset_class,
+                    multiplier=spec.multiplier,
+                    quote_currency=spec.quote_currency,
+                )
+                for spec in DEFAULT_INSTRUMENTS
+            )
         session.commit()
     return engine
 

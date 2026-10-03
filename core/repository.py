@@ -16,8 +16,10 @@ TRADE_COLUMNS = [
     "id",
     "account_id",
     "account",
-    "currency",
     "symbol",
+    "instrument",
+    "asset_class",
+    "point_value",
     "side",
     "status",
     "quantity",
@@ -86,8 +88,10 @@ def load_trades(
                 "id": t.id,
                 "account_id": t.account_id,
                 "account": t.account.name,
-                "currency": t.account.currency,
                 "symbol": t.symbol,
+                "instrument": t.instrument or t.symbol,
+                "asset_class": t.asset_class.value,
+                "point_value": t.point_value,
                 "side": t.side.value,
                 "status": t.status.value,
                 "quantity": t.quantity,
@@ -112,6 +116,14 @@ def load_trades(
     df = pd.DataFrame(rows, columns=TRADE_COLUMNS)
     df["entry_time"] = pd.to_datetime(df["entry_time"])
     df["exit_time"] = pd.to_datetime(df["exit_time"])
-    for col in ("quantity", "avg_entry_price", "avg_exit_price", "fees", "net_pnl", "stop_loss"):
+    for col in (
+        "quantity",
+        "avg_entry_price",
+        "avg_exit_price",
+        "fees",
+        "net_pnl",
+        "stop_loss",
+        "point_value",
+    ):
         df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)
     return add_dimensions(df)

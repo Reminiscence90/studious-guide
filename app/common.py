@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from core.db import get_engine, init_db, session_scope
+from core.instruments import ACCOUNT_CURRENCY, AssetClass
 from core.models import Account, Trade
 from core.repository import load_trades
 
@@ -43,8 +44,8 @@ class Filters:
     account_ids: tuple[int, ...]
     start: date | None
     end: date | None
-    currency: str
-    mixed_currency: bool
+    asset_classes: tuple[str, ...] = ()
+    currency: str = ACCOUNT_CURRENCY
 
     @property
     def label(self) -> str:
@@ -74,12 +75,20 @@ def render_sidebar_filters() -> Filters:
         "Accounts",
         options=list(by_id),
         default=list(by_id),
-        format_func=lambda i: f"{by_id[i].name} ({by_id[i].currency})",
+        format_func=lambda i: by_id[i].name,
         key="filter_accounts",
     )
     if not selected:
         st.sidebar.caption("No account selected — showing all.")
         selected = list(by_id)
+
+    asset_classes = st.sidebar.multiselect(
+        "Markets",
+        options=[a.value for a in AssetClass],
+        format_func=lambda v: AssetClass(v).label,
+        key="filter_assets",
+        placeholder="All markets",
+    )
 
     lo, hi = _trade_date_bounds()
     preset = st.sidebar.selectbox("Date range", DATE_PRESETS, key="filter_preset")
@@ -106,13 +115,12 @@ def render_sidebar_filters() -> Filters:
     if preset not in ("All time", "Custom"):
         st.sidebar.caption(f"{start:%d %b %Y} – {end:%d %b %Y} (relative to latest trade)")
 
-    currencies = sorted({by_id[i].currency for i in selected if i in by_id})
+    st.sidebar.caption(f"All amounts in {ACCOUNT_CURRENCY}.")
     return Filters(
         account_ids=tuple(selected),
         start=start,
         end=end,
-        currency=currencies[0] if len(currencies) == 1 else "/".join(currencies),
-        mixed_currency=len(currencies) > 1,
+        asset_classes=tuple(asset_classes),
     )
 
 
@@ -123,20 +131,38 @@ def get_filters() -> Filters:
     return filters
 
 
-def currency_warning(filters: Filters) -> None:
-    if filters.mixed_currency:
-        st.warning(
-            f"The selected accounts use different currencies ({filters.currency}). "
-            "Totals are summed without conversion — filter to one account for exact figures."
-        )
-
-
-def fmt_money(value: float | None, currency: str = "", signed: bool = True) -> str:
+def fmt_money(
+    value: float | None, currency: str = "", signed: bool = True, decimals: int = 2
+) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "–"
     sign = "+" if signed and value > 0 else "-" if value < 0 else ""
     prefix = f"{currency} " if currency else ""
-    return f"{sign}{prefix}{abs(value):,.2f}"
+    return f"{sign}{prefix}{abs(value):,.{decimals}f}"
+
+
+def fmt_tile_money(value: float | None, signed: bool = True) -> str:
+    """Money for narrow stat tiles: whole dollars from 10,000 so the figure fits."""
+    big = value is not None and not math.isnan(value) and abs(value) >= 10_000
+    return fmt_money(value, signed=signed, decimals=0 if big else 2)
+
+
+def fmt_price(value: float | None) -> str:
+    """Prices with the precision the market needs: 1.16523, 147.512, 431.20, 112,503.50."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return "–"
+    decimals = 5 if abs(value) < 10 else 3 if abs(value) < 1000 else 2
+    text = f"{value:,.{decimals}f}"
+    if decimals > 2:
+        text = text.rstrip("0")
+        if len(text.split(".")[1]) < 2:
+            text = f"{value:,.2f}"
+    return text
+
+
+def fmt_qty(value: float) -> str:
+    """Shares/contracts as integers, lots and coins with their decimals."""
+    return f"{value:,.0f}" if float(value).is_integer() else f"{value:,.4f}".rstrip("0")
 
 
 def fmt_ratio(value: float | None, digits: int = 2) -> str:
@@ -167,7 +193,10 @@ def load_filtered_trades(filters: Filters | None = None) -> pd.DataFrame:
     """All trades (open and closed) matching the sidebar filters."""
     filters = filters or get_filters()
     with db() as s:
-        return load_trades(s, filters.account_ids, filters.start, filters.end)
+        df = load_trades(s, filters.account_ids, filters.start, filters.end)
+    if filters.asset_classes:
+        df = df[df["asset_class"].isin(filters.asset_classes)]
+    return df
 
 
 def stat_tile(label: str, value: str, help: str | None = None) -> None:

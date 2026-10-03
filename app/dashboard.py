@@ -6,10 +6,9 @@ import streamlit as st
 
 from app.charts import daily_pnl_figure, equity_curve_figure, journal_score_radar
 from app.common import (
-    currency_warning,
-    fmt_money,
     fmt_pct,
     fmt_ratio,
+    fmt_tile_money,
     get_filters,
     load_filtered_trades,
     stat_tile,
@@ -28,14 +27,13 @@ st.caption(
     f"{filters.label} · {stats.total_trades} closed trades · amounts in {cur}"
     + (f" · {open_count} open positions excluded from stats" if open_count else "")
 )
-currency_warning(filters)
 
 if stats.total_trades == 0:
     st.info("No closed trades in this range. Import trades or widen the date filter.")
 
 row1 = st.columns(5)
 with row1[0]:
-    stat_tile("Net P&L", fmt_money(stats.net_pnl), "Sum of net P&L (after fees)")
+    stat_tile("Net P&L", fmt_tile_money(stats.net_pnl), "Sum of net P&L (after fees)")
 with row1[1]:
     stat_tile("Win rate", fmt_pct(stats.win_rate), "Winning trades / closed trades")
 with row1[2]:
@@ -43,7 +41,7 @@ with row1[2]:
 with row1[3]:
     stat_tile(
         "Expectancy",
-        fmt_money(stats.expectancy),
+        fmt_tile_money(stats.expectancy),
         "Win rate × avg win − loss rate × avg loss (per trade)",
     )
 with row1[4]:
@@ -51,15 +49,15 @@ with row1[4]:
 
 row2 = st.columns(5)
 with row2[0]:
-    stat_tile("Avg win", fmt_money(stats.avg_win, signed=False))
+    stat_tile("Avg win", fmt_tile_money(stats.avg_win, signed=False))
 with row2[1]:
-    stat_tile("Avg loss", fmt_money(stats.avg_loss, signed=False))
+    stat_tile("Avg loss", fmt_tile_money(stats.avg_loss, signed=False))
 with row2[2]:
     stat_tile("Avg win / loss", fmt_ratio(stats.avg_win_loss_ratio), "Avg win ÷ avg loss")
 with row2[3]:
     stat_tile(
         "Max drawdown",
-        fmt_money(-stats.max_drawdown if stats.max_drawdown else 0.0),
+        fmt_tile_money(-stats.max_drawdown if stats.max_drawdown else 0.0),
         "Largest peak-to-trough fall of cumulative P&L",
     )
 with row2[4]:

@@ -26,7 +26,7 @@ def trades(session: Session) -> Session:
     )
     trade = session.query(Trade).filter_by(symbol="A").one()
     trade.stop_loss = 9.5
-    trade.tags.append(session.query(Tag).filter_by(name="Breakout").one())
+    trade.tags.append(session.query(Tag).filter_by(name="Supply/Demand zone").one())
     trade.tags.append(Tag(name="Patient", category=TagCategory.EMOTION))
     session.flush()
     return session
@@ -36,10 +36,11 @@ def test_load_trades_columns_and_derived_fields(trades: Session) -> None:
     df = load_trades(trades)
     assert len(df) == 3
     a = df.set_index("symbol").loc["A"]
-    assert a["setups"] == ["Breakout"]
+    assert a["setups"] == ["Supply/Demand zone"]
     assert a["emotions"] == ["Patient"]
     assert a["r_multiple"] == pytest.approx(2.0)
-    assert a["currency"] == "MYR"
+    assert a["asset_class"] == "stock"
+    assert a["instrument"] == "A"
     assert a["holding_bucket"] == "15–60 min"
     assert m.total_trades(df) == 2
     assert m.net_pnl(df) == pytest.approx(0)

@@ -1,12 +1,21 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from core.models import Account, Tag, TagCategory
+from core.instruments import AssetClass
+from core.models import Account, Instrument, Tag, TagCategory
 
 
-def test_init_creates_default_account_and_tags(session: Session) -> None:
+def test_init_creates_default_account_tags_and_instruments(session: Session) -> None:
     accounts = session.scalars(select(Account)).all()
-    assert [(a.name, a.currency) for a in accounts] == [("Main", "MYR")]
+    assert [a.name for a in accounts] == ["Main"]
+    setups = session.scalars(select(Tag.name).where(Tag.category == TagCategory.SETUP)).all()
+    assert sorted(setups) == [
+        "Golden Ratio - 0.618 retracement",
+        "ICT - Liquidity Sweep + BOS + Imbalance",
+        "Supply/Demand zone",
+    ]
+    es = session.scalars(select(Instrument).where(Instrument.symbol == "ES")).one()
+    assert (es.asset_class, es.multiplier) == (AssetClass.FUTURE, 50)
     categories = {t.category for t in session.scalars(select(Tag))}
     assert categories == set(TagCategory)
 
@@ -25,7 +34,7 @@ def test_deleting_account_cascades_to_trades(session: Session) -> None:
     from core.importer import Fill, import_fills
     from core.models import Execution, ExecutionSide, Trade
 
-    account = Account(name="Temp", currency="USD")
+    account = Account(name="Temp")
     session.add(account)
     session.flush()
     import_fills(

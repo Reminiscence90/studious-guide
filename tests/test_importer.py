@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime
 
 import pandas as pd
@@ -16,11 +17,15 @@ from core.importer import (
     guess_mapping,
     import_dataframe,
     import_fills,
+    load_specs,
     parse_side,
+    recalculate_trades,
+    replace_instruments,
     rows_to_executions,
     save_preset,
     validate_mapping,
 )
+from core.instruments import AssetClass, InstrumentSpec, normalise_symbol
 from core.models import (
     Account,
     BrokerPreset,
@@ -281,7 +286,7 @@ def test_import_skips_duplicates(session: Session) -> None:
 
 
 def test_same_rows_in_another_account_are_not_duplicates(session: Session) -> None:
-    other = Account(name="Other", currency="USD")
+    other = Account(name="Other")
     session.add(other)
     session.flush()
     df = _csv([{"sym": "A", "side": "buy", "qty": 1, "price": 10, "time": "2026-06-01", "fee": 0}])
@@ -346,7 +351,7 @@ def test_manual_trade(session: Session) -> None:
     trade = add_manual_trade(
         session,
         1,
-        symbol=" maybank ",
+        symbol=" tsla ",
         side=TradeSide.SHORT,
         quantity=100,
         entry_price=10,
@@ -358,7 +363,7 @@ def test_manual_trade(session: Session) -> None:
         notes="manual",
     )
     assert trade is not None
-    assert trade.symbol == "MAYBANK"
+    assert trade.symbol == "TSLA"
     assert trade.net_pnl == pytest.approx(98)
     assert trade.stop_loss == 10.5
     assert trade.notes == "manual"
@@ -404,3 +409,87 @@ def test_sample_csv_imports_cleanly(session: Session) -> None:
     assert 190 <= len(trades) <= 220
     assert len(trades) < len(df)  # partial exits were grouped
     assert sum(tr.status is TradeStatus.OPEN for tr in trades) == 2
+    assert {tr.asset_class for tr in trades} == set(AssetClass)
+    by_instrument = Counter(tr.instrument for tr in trades)
+    assert by_instrument.most_common(1)[0][0] == "TSLA"
+    es = next(tr for tr in trades if tr.symbol.startswith("ES") and tr.symbol != "ES")
+    assert (es.instrument, es.point_value) == ("ES", 50)
+
+
+# ---------------------------------------------------------------- multipliers
+
+
+def _round_trip(session: Session, symbol: str, side: ExecutionSide, qty: float,
+                entry: float, exit_: float) -> Trade:  # fmt: skip
+    import_fills(
+        session,
+        1,
+        [
+            Fill(symbol, side, qty, entry, t("09:30")),
+            Fill(symbol, SELL if side is BUY else BUY, qty, exit_, t("10:30")),
+        ],
+    )
+    return session.scalars(select(Trade).where(Trade.symbol == normalise_symbol(symbol))).one()
+
+
+def test_futures_pnl_uses_contract_multiplier(session: Session) -> None:
+    trade = _round_trip(session, "ESZ6", BUY, 2, 6500.00, 6510.25)
+    assert (trade.instrument, trade.asset_class) == ("ES", AssetClass.FUTURE)
+    assert trade.gross_pnl == pytest.approx(10.25 * 2 * 50)
+
+
+def test_micro_futures_and_commodity_futures(session: Session) -> None:
+    assert _round_trip(session, "MNQH7", SELL, 3, 23500, 23450).gross_pnl == pytest.approx(300)
+    cl = _round_trip(session, "CLX6", BUY, 1, 65.10, 65.55)
+    assert cl.asset_class is AssetClass.COMMODITY
+    assert cl.gross_pnl == pytest.approx(450)
+
+
+def test_forex_lots_usd_quoted(session: Session) -> None:
+    trade = _round_trip(session, "EUR/USD", BUY, 0.5, 1.16500, 1.16700)
+    assert trade.symbol == "EURUSD"
+    assert trade.gross_pnl == pytest.approx(0.002 * 0.5 * 100_000)  # 20 pips × 0.5 lot = $100
+
+
+def test_forex_usd_base_pair_converted_to_usd(session: Session) -> None:
+    trade = _round_trip(session, "USDJPY", SELL, 1, 148.000, 147.500)
+    # 50 pips on 1 lot = ¥50,000, converted at the exit rate 147.5
+    assert trade.gross_pnl == pytest.approx(50_000 / 147.5)
+    assert trade.point_value == pytest.approx(100_000 / 147.5)
+
+
+def test_spot_gold_and_crypto(session: Session) -> None:
+    gold = _round_trip(session, "XAUUSD", BUY, 0.2, 3400.0, 3412.5)
+    assert gold.gross_pnl == pytest.approx(12.5 * 0.2 * 100)
+    btc = _round_trip(session, "BTC-USDT", SELL, 0.05, 112_000, 111_000)
+    assert (btc.symbol, btc.asset_class) == ("BTCUSD", AssetClass.CRYPTO)
+    assert btc.gross_pnl == pytest.approx(50)
+
+
+def test_unknown_symbol_is_a_us_stock(session: Session) -> None:
+    trade = _round_trip(session, "TSLA", BUY, 100, 430.0, 433.5)
+    assert (trade.asset_class, trade.point_value) == (AssetClass.STOCK, 1)
+    assert trade.gross_pnl == pytest.approx(350)
+
+
+def test_recalculate_after_changing_multiplier(session: Session) -> None:
+    trade = _round_trip(session, "FOO", BUY, 10, 100, 101)
+    assert trade.gross_pnl == pytest.approx(10)
+    specs = list(load_specs(session).values())
+    replace_instruments(session, [*specs, InstrumentSpec("FOO", AssetClass.FUTURE, 20)])
+    assert recalculate_trades(session) == 1
+    session.refresh(trade)
+    assert (trade.gross_pnl, trade.asset_class) == (pytest.approx(200), AssetClass.FUTURE)
+
+
+def test_replace_instruments_validation(session: Session) -> None:
+    with pytest.raises(ValueError, match="Duplicate"):
+        replace_instruments(
+            session,
+            [
+                InstrumentSpec("es", AssetClass.FUTURE, 50),
+                InstrumentSpec("ES", AssetClass.FUTURE, 5),
+            ],
+        )
+    with pytest.raises(ValueError, match="positive"):
+        replace_instruments(session, [InstrumentSpec("ES", AssetClass.FUTURE, 0)])

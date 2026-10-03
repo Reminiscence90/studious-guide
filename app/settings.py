@@ -1,19 +1,21 @@
-"""Accounts, tags and broker presets."""
+"""Accounts, instruments, tags and broker presets."""
 
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 
 from app.common import db
-from core.models import Account, BrokerPreset, Tag, TagCategory, Trade, trade_tags
-
-CURRENCIES = ["MYR", "USD", "SGD", "EUR", "GBP", "AUD", "HKD", "JPY", "IDR", "THB"]
+from core.importer import recalculate_trades, replace_instruments
+from core.instruments import ACCOUNT_CURRENCY, AssetClass, InstrumentSpec
+from core.models import Account, BrokerPreset, Instrument, Tag, TagCategory, Trade, trade_tags
 
 st.title("Settings")
 
 # ------------------------------------------------------------------ accounts
 st.header("Accounts")
+st.caption(f"All accounts are in {ACCOUNT_CURRENCY}.")
 with db() as s:
     rows = s.execute(
         select(Account, func.count(Trade.id))
@@ -21,19 +23,17 @@ with db() as s:
         .group_by(Account.id)
         .order_by(Account.id)
     ).all()
-    account_rows = [(a.id, a.name, a.currency, n) for a, n in rows]
+    account_rows = [(a.id, a.name, n) for a, n in rows]
 
-for acc_id, name, currency, n_trades in account_rows:
-    with st.expander(f"{name} — {currency} · {n_trades} trades"):
+for acc_id, name, n_trades in account_rows:
+    with st.expander(f"{name} · {n_trades} trades"):
         with st.form(f"acc_{acc_id}"):
             new_name = st.text_input("Name", value=name)
-            idx = CURRENCIES.index(currency) if currency in CURRENCIES else 0
-            new_currency = st.selectbox("Currency", CURRENCIES, index=idx)
             if st.form_submit_button("Save"):
                 with db() as s:
                     acc = s.get(Account, acc_id)
                     assert acc is not None
-                    acc.name, acc.currency = new_name.strip() or name, new_currency
+                    acc.name = new_name.strip() or name
                 st.rerun()
         if len(account_rows) > 1 and st.button(
             "Delete account and its trades", key=f"del_acc_{acc_id}"
@@ -46,16 +46,77 @@ for acc_id, name, currency, n_trades in account_rows:
 
 with st.form("new_account", clear_on_submit=True):
     st.subheader("Add account")
-    c1, c2 = st.columns(2)
-    name = c1.text_input("Name")
-    currency = c2.selectbox("Currency", CURRENCIES)
+    name = st.text_input("Name")
     if st.form_submit_button("Add account") and name.strip():
         with db() as s:
             if s.scalars(select(Account).where(Account.name == name.strip())).first():
                 st.error("An account with that name already exists.")
             else:
-                s.add(Account(name=name.strip(), currency=currency))
+                s.add(Account(name=name.strip()))
                 st.rerun()
+
+# ------------------------------------------------------------------ instruments
+st.header("Instruments")
+st.caption(
+    "P&L = price move × quantity × multiplier. Futures: quantity in contracts, multiplier = "
+    "$ per point (ES 50, NQ 20, CL 1,000). Forex: quantity in lots, multiplier 100,000 "
+    "(set 1 if your broker exports units); USD-base pairs such as USDJPY are converted to "
+    "USD at the exit price. Futures contract codes (ESZ6, MNQH27) match their root. Symbols "
+    "not listed are treated as US stocks with multiplier 1."
+)
+with db() as s:
+    instruments = pd.DataFrame(
+        [
+            {
+                "symbol": i.symbol,
+                "name": i.name,
+                "asset_class": i.asset_class.value,
+                "multiplier": i.multiplier,
+                "quote_currency": i.quote_currency,
+            }
+            for i in s.scalars(
+                select(Instrument).order_by(Instrument.asset_class, Instrument.symbol)
+            )
+        ],
+        columns=["symbol", "name", "asset_class", "multiplier", "quote_currency"],
+    )
+edited = st.data_editor(
+    instruments,
+    num_rows="dynamic",
+    hide_index=True,
+    width="stretch",
+    column_config={
+        "symbol": st.column_config.TextColumn("Symbol / futures root", required=True),
+        "name": "Name",
+        "asset_class": st.column_config.SelectboxColumn(
+            "Market", options=[a.value for a in AssetClass], required=True
+        ),
+        "multiplier": st.column_config.NumberColumn(
+            "Multiplier", min_value=0.0, format="%g", required=True
+        ),
+        "quote_currency": st.column_config.TextColumn("Quote ccy", max_chars=4),
+    },
+    key="instrument_editor",
+)
+if st.button("💾 Save instruments and recalculate P&L"):
+    specs = [
+        InstrumentSpec(
+            symbol=str(r.symbol),
+            asset_class=AssetClass(r.asset_class),
+            multiplier=float(r.multiplier),
+            quote_currency=str(r.quote_currency or "USD"),
+            name=str(r.name or ""),
+        )
+        for r in edited.dropna(subset=["symbol", "asset_class", "multiplier"]).itertuples()
+    ]
+    try:
+        with db() as s:
+            replace_instruments(s, specs)
+            updated = recalculate_trades(s)
+    except ValueError as exc:
+        st.error(str(exc))
+    else:
+        st.success(f"Saved {len(specs)} instruments and recalculated {updated} trades.")
 
 # ------------------------------------------------------------------ tags
 st.header("Tags")

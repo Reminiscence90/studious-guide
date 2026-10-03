@@ -22,7 +22,7 @@ Definitions
 * **Max drawdown**: the largest peak-to-trough fall of cumulative net P&L, measured
   from a starting equity of 0, reported as a positive amount.
 * **R-multiple**: net P&L / initial risk, where initial risk =
-  |entry price − stop loss| × quantity.
+  |entry price − stop loss| × quantity × point value.
 """
 
 from __future__ import annotations
@@ -219,22 +219,32 @@ def weekly_totals(daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def r_multiple(
-    pnl: float, entry_price: float, stop_loss: float | None, quantity: float
+    pnl: float,
+    entry_price: float,
+    stop_loss: float | None,
+    quantity: float,
+    point_value: float = 1.0,
 ) -> float | None:
-    """P&L expressed in units of initial risk. None without a (valid) stop loss."""
+    """P&L expressed in units of initial risk. None without a (valid) stop loss.
+
+    ``point_value`` is the USD value of a 1.0 price move per unit (contract
+    multiplier, forex lot size, ...), so risk is in the same USD terms as P&L.
+    """
     if stop_loss is None or pd.isna(stop_loss) or quantity <= 0:
         return None
-    risk = abs(entry_price - stop_loss) * quantity
+    risk = abs(entry_price - stop_loss) * quantity * point_value
     if risk == 0:
         return None
     return pnl / risk
 
 
 def r_multiples(df: pd.DataFrame) -> pd.Series:
-    """Vectorised :func:`r_multiple` for a DataFrame with stop_loss/avg_entry_price/quantity."""
+    """Vectorised :func:`r_multiple` for a DataFrame with stop_loss/avg_entry_price/quantity
+    (and optionally point_value, default 1)."""
     if df.empty:
         return pd.Series(dtype=float)
-    risk = (df["avg_entry_price"] - df["stop_loss"]).abs() * df["quantity"]
+    pv = df["point_value"] if "point_value" in df.columns else 1.0
+    risk = (df["avg_entry_price"] - df["stop_loss"]).abs() * df["quantity"] * pv
     risk = risk.where(risk > 0)
     return (df["net_pnl"] / risk).astype(float)
 
