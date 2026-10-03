@@ -140,12 +140,11 @@ How a symbol is resolved:
 0. **Clean-up.** Common spellings are normalised first: `EUR/USD` → `EURUSD`,
    `BTC-USDT` → `BTCUSD`, `/ESZ6` → `ESZ6`, `ES1!` → `ES`. Broker account suffixes after
    a dot are dropped when the rest is a market symbol, so **`XAUUSD.R` is treated as
-   `XAUUSD` and `EURUSD.R` as `EURUSD`** (also `.r`, `.m`, `.pro`, …). They use the base
-   symbol's multiplier (gold 100 oz per lot), and rows with and without the suffix
-   belong to the same position. Trades executed with a suffixed symbol are classed as
-   **Forex**, so `XAUUSD.R` appears under Forex while a plain `XAUUSD` stays under
-   Commodities. The original symbol is kept on each execution and shown on the trade
-   page. Dotted stock tickers such as `BRK.B` are left alone.
+   `XAUUSD` and `EURUSD.R` as `EURUSD`** (also `.r`, `.m`, `.pro`, …). They get the base
+   symbol's market and multiplier: `XAUUSD.R` is a **commodity** (gold, 100 oz per lot)
+   and `EURUSD.R` is **forex** (100,000 per lot). Rows with and without the suffix
+   belong to the same position. The original symbol is kept on each execution and
+   shown on the trade page. Dotted stock tickers such as `BRK.B` are left alone.
 
 1. **Exact match** in the instrument table.
 2. **Futures contract code**: root + month code + year (`ESZ6`, `ESZ26`, `MNQH2027`)

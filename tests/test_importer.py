@@ -487,25 +487,30 @@ def test_broker_suffix_is_treated_as_base_symbol(session: Session) -> None:
     assert trades["XAUUSD"].gross_pnl == pytest.approx(10 * 0.5 * 100)
     assert trades["EURUSD"].gross_pnl == pytest.approx(0.005 * 100_000)
     assert trades["EURUSD"].asset_class is AssetClass.FOREX
-    # Broker-suffixed symbols fall under forex, keeping the base contract size.
-    assert trades["XAUUSD"].asset_class is AssetClass.FOREX
+    # Suffixed symbols are classed like their base: gold is a commodity, EURUSD forex.
+    assert trades["XAUUSD"].asset_class is AssetClass.COMMODITY
     assert trades["XAUUSD"].point_value == 100
     raw = {e.raw_symbol for e in session.scalars(select(Execution))}
     assert raw == {"XAUUSD.R", "XAUUSD", "EURUSD.R"}  # as imported, upper-cased
 
 
-def test_plain_spot_gold_stays_a_commodity(session: Session) -> None:
-    gold = _round_trip(session, "XAUUSD", BUY, 0.1, 3400.0, 3405.0)
-    assert gold.asset_class is AssetClass.COMMODITY
-
-
-def test_suffixed_classification_survives_recalculation(session: Session) -> None:
+def test_suffixed_gold_is_a_commodity_and_keeps_raw_symbol(session: Session) -> None:
     gold = _round_trip(session, "XAUUSD.R", BUY, 0.1, 3400.0, 3405.0)
-    assert (gold.symbol, gold.asset_class) == ("XAUUSD", AssetClass.FOREX)
+    assert (gold.symbol, gold.asset_class) == ("XAUUSD", AssetClass.COMMODITY)
+    assert {e.raw_symbol for e in gold.executions} == {"XAUUSD.R"}
     recalculate_trades(session)
     session.refresh(gold)
-    assert gold.asset_class is AssetClass.FOREX
+    assert gold.asset_class is AssetClass.COMMODITY
     assert gold.gross_pnl == pytest.approx(5 * 0.1 * 100)
+
+
+def test_recalculation_fixes_previously_misclassified_trades(session: Session) -> None:
+    gold = _round_trip(session, "XAUUSD.R", BUY, 0.1, 3400.0, 3405.0)
+    gold.asset_class = AssetClass.FOREX  # as stored by the earlier suffix rule
+    session.flush()
+    recalculate_trades(session)
+    session.refresh(gold)
+    assert gold.asset_class is AssetClass.COMMODITY
 
 
 def test_manual_trade_with_broker_suffix(session: Session) -> None:

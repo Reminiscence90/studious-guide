@@ -31,7 +31,6 @@ from core.instruments import (
     AssetClass,
     InstrumentSpec,
     default_specs,
-    has_broker_suffix,
     normalise_symbol,
     point_value,
     resolve,
@@ -496,7 +495,7 @@ def recalculate_trades(session: Session) -> int:
         if not fills:
             continue
         is_closed = trade.status is TradeStatus.CLOSED
-        spec = spec_for(trade.symbol, fills, specs)
+        spec = resolve(trade.symbol, specs)
         _apply_summary(trade, summarize_fills(fills, trade.side, is_closed, spec))
     session.flush()
     return len(trades)
@@ -513,17 +512,6 @@ def _fill_from_execution(e: Execution) -> Fill:
         e.import_hash,
         e.raw_symbol or e.symbol,
     )
-
-
-def spec_for(
-    symbol: str, fills: Sequence[Fill], specs: dict[str, InstrumentSpec]
-) -> InstrumentSpec:
-    """Instrument spec for a trade. Trades executed with a broker-suffixed symbol
-    (``XAUUSD.R``, ``EURUSD.R``) are classed as forex; contract size is unchanged."""
-    spec = resolve(symbol, specs)
-    if any(has_broker_suffix(f.raw_symbol or f.symbol, specs) for f in fills):
-        spec = replace(spec, asset_class=AssetClass.FOREX)
-    return spec
 
 
 def import_fills(
@@ -585,7 +573,7 @@ def import_fills(
             session.flush()
 
         for i, group in enumerate(group_executions(prior + sym_fills)):
-            summary = group.summary(spec_for(symbol, group.fills, specs))
+            summary = group.summary(resolve(symbol, specs))
             if i == 0 and open_trade is not None:
                 trade = open_trade
                 result.trades_updated += 1
