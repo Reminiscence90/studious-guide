@@ -69,8 +69,12 @@ class Account(Base):
     currency: Mapped[str] = mapped_column(String(3), default="MYR")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
-    trades: Mapped[list[Trade]] = relationship(back_populates="account")
-    executions: Mapped[list[Execution]] = relationship(back_populates="account")
+    trades: Mapped[list[Trade]] = relationship(
+        back_populates="account", cascade="all, delete-orphan", passive_deletes=True
+    )
+    executions: Mapped[list[Execution]] = relationship(
+        back_populates="account", cascade="all, delete-orphan", passive_deletes=True
+    )
 
     def __repr__(self) -> str:
         return f"Account(id={self.id}, name={self.name!r}, currency={self.currency!r})"
@@ -116,7 +120,10 @@ class Trade(Base):
 
     account: Mapped[Account] = relationship(back_populates="trades")
     executions: Mapped[list[Execution]] = relationship(
-        back_populates="trade", order_by="Execution.timestamp"
+        back_populates="trade",
+        order_by="Execution.timestamp",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     tags: Mapped[list[Tag]] = relationship(secondary=trade_tags, back_populates="trades")
     screenshots: Mapped[list[Screenshot]] = relationship(
