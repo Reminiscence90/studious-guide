@@ -24,10 +24,31 @@ SPECS = default_specs()
         ("ES1!", "ES"),
         ("CL=F", "CL"),
         (" xauusd ", "XAUUSD"),
+        # broker account suffixes are dropped from market symbols...
+        ("XAUUSD.R", "XAUUSD"),
+        ("EURUSD.R", "EURUSD"),
+        ("eurusd.r", "EURUSD"),
+        ("GBPJPY.pro", "GBPJPY"),
+        ("USOIL.m", "USOIL"),
+        ("BTCUSDT.R", "BTCUSD"),
+        ("EUR/USD.R", "EURUSD"),
+        # ...but not from other dotted symbols
+        ("BRK.B", "BRK.B"),
+        ("FOO.R", "FOO.R"),
     ],
 )
 def test_normalise_symbol(raw: str, clean: str) -> None:
     assert normalise_symbol(raw) == clean
+
+
+def test_suffix_dropped_for_user_defined_instrument() -> None:
+    assert normalise_symbol("US30.R") == "US30.R"
+    assert normalise_symbol("US30.R", known={"US30"}) == "US30"
+
+
+def test_suffixed_symbols_resolve_to_base_spec() -> None:
+    assert resolve("XAUUSD.R", SPECS) == SPECS["XAUUSD"]
+    assert resolve("EURUSD.R", SPECS) == SPECS["EURUSD"]
 
 
 @pytest.mark.parametrize(

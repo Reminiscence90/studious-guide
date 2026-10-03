@@ -515,7 +515,8 @@ def import_fills(
     one becomes a single trade.
     """
     result = ImportResult()
-    fills = [replace(f, symbol=normalise_symbol(f.symbol)) for f in fills]
+    specs = load_specs(session)
+    fills = [replace(f, symbol=normalise_symbol(f.symbol, specs)) for f in fills]
     fills = assign_fingerprints(account_id, fills)
     hashes = [f.import_hash for f in fills]
     existing: set[str] = set()
@@ -537,7 +538,6 @@ def import_fills(
     by_symbol: dict[str, list[Fill]] = defaultdict(list)
     for f in new_fills:
         by_symbol[f.symbol].append(f)
-    specs = load_specs(session)
 
     for symbol, sym_fills in by_symbol.items():
         open_trade = session.scalars(

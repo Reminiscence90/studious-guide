@@ -466,6 +466,29 @@ def test_spot_gold_and_crypto(session: Session) -> None:
     assert btc.gross_pnl == pytest.approx(50)
 
 
+def test_broker_suffix_is_treated_as_base_symbol(session: Session) -> None:
+    # Opened as XAUUSD.R, closed as XAUUSD: one position, one trade.
+    df = _csv(
+        [
+            {"sym": "XAUUSD.R", "side": "buy", "qty": 0.5, "price": 3400.0,
+             "time": "2026-06-01 09:30", "fee": 0},
+            {"sym": "XAUUSD", "side": "sell", "qty": 0.5, "price": 3410.0,
+             "time": "2026-06-01 10:00", "fee": 0},
+            {"sym": "EURUSD.R", "side": "sell", "qty": 1, "price": 1.1700,
+             "time": "2026-06-01 11:00", "fee": 0},
+            {"sym": "EURUSD.r", "side": "buy", "qty": 1, "price": 1.1650,
+             "time": "2026-06-01 12:00", "fee": 0},
+        ]
+    )  # fmt: skip
+    result = import_dataframe(session, 1, df, MAPPING)
+    assert result.trades_created == 2
+    trades = {tr.symbol: tr for tr in session.scalars(select(Trade))}
+    assert set(trades) == {"XAUUSD", "EURUSD"}
+    assert trades["XAUUSD"].gross_pnl == pytest.approx(10 * 0.5 * 100)
+    assert trades["EURUSD"].gross_pnl == pytest.approx(0.005 * 100_000)
+    assert trades["EURUSD"].asset_class is AssetClass.FOREX
+
+
 def test_unknown_symbol_is_a_us_stock(session: Session) -> None:
     trade = _round_trip(session, "TSLA", BUY, 100, 430.0, 433.5)
     assert (trade.asset_class, trade.point_value) == (AssetClass.STOCK, 1)

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import enum
 import re
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 
 ACCOUNT_CURRENCY = "USD"
@@ -113,12 +113,21 @@ CRYPTO_BASES = {"BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "AVAX", "LTC",
 STABLE_QUOTES = ("USDT", "USDC", "USD")
 FUTURES_MONTHS = "FGHJKMNQUVXZ"
 
+_CATALOG_SYMBOLS = frozenset(s.symbol for s in DEFAULT_INSTRUMENTS)
 _FUTURES_CONTRACT = re.compile(rf"^([A-Z0-9]{{1,4}}?)[{FUTURES_MONTHS}](\d{{1,4}})$")
 
 
-def normalise_symbol(raw: str) -> str:
-    """Clean common broker/charting spellings: ``/ESZ6`` → ``ESZ6``, ``EUR/USD`` → ``EURUSD``,
-    ``BTC-USD`` → ``BTCUSD``, ``ES1!`` → ``ES``, ``CL=F`` → ``CL``, ``BTCUSDT`` → ``BTCUSD``."""
+def normalise_symbol(raw: str, known: Collection[str] = ()) -> str:
+    """Clean common broker/charting spellings.
+
+    ``/ESZ6`` → ``ESZ6``, ``EUR/USD`` → ``EURUSD``, ``BTC-USD`` → ``BTCUSD``, ``ES1!`` → ``ES``,
+    ``CL=F`` → ``CL``, ``BTCUSDT`` → ``BTCUSD``.
+
+    Broker account suffixes after a dot (``XAUUSD.R``, ``EURUSD.r``, ``GBPJPY.pro``) are
+    dropped when the part before the dot is a market symbol: one in ``known`` or the
+    built-in catalog, a forex pair or a crypto pair. Other dotted symbols, such as the
+    share class in ``BRK.B``, are kept.
+    """
     s = str(raw).strip().upper()
     s = s.removeprefix("/")
     s = re.sub(r"\d!$", "", s)  # TradingView continuous contracts
@@ -127,8 +136,26 @@ def normalise_symbol(raw: str) -> str:
     for quote in ("USDT", "USDC"):
         base = s.removesuffix(quote)
         if base != s and base in CRYPTO_BASES:
-            return base + "USD"
+            s = base + "USD"
+            break
+    base, dot, suffix = s.rpartition(".")
+    if dot and base and suffix.isalnum() and len(suffix) <= 4:
+        clean_base = normalise_symbol(base, known)
+        if _is_market_symbol(clean_base, known):
+            return clean_base
     return s
+
+
+def _is_market_symbol(symbol: str, known: Collection[str]) -> bool:
+    """True for catalog/known instruments, forex pairs and crypto pairs."""
+    if symbol in known or symbol in _CATALOG_SYMBOLS:
+        return True
+    if len(symbol) == 6 and symbol[:3] in CURRENCIES and symbol[3:] in CURRENCIES:
+        return True
+    return any(
+        symbol.removesuffix(q) != symbol and symbol.removesuffix(q) in CRYPTO_BASES
+        for q in STABLE_QUOTES
+    )
 
 
 def futures_root(symbol: str, known: Iterable[str]) -> str | None:
@@ -145,7 +172,7 @@ def resolve(symbol: str, specs: dict[str, InstrumentSpec]) -> InstrumentSpec:
     Order: exact match → futures contract root → forex pair pattern → crypto pair
     pattern → default US stock (multiplier 1).
     """
-    sym = normalise_symbol(symbol)
+    sym = normalise_symbol(symbol, specs)
     if sym in specs:
         return specs[sym]
     root = futures_root(sym, specs)

@@ -60,7 +60,7 @@ a broker preset so it's prefilled next time.
 
 | Field | Required | Notes |
 |---|---|---|
-| Symbol | yes | `TSLA`, `ESZ6`, `/MNQH7`, `EURUSD`, `EUR/USD`, `XAUUSD`, `BTCUSD`, `BTC-USDT`… normalised on import (see [Markets and instruments](#markets-and-instruments)) |
+| Symbol | yes | `TSLA`, `ESZ6`, `/MNQH7`, `EURUSD`, `EUR/USD`, `EURUSD.R`, `XAUUSD.R`, `BTCUSD`, `BTC-USDT`… normalised on import (see [Markets and instruments](#markets-and-instruments)) |
 | Side | yes | `buy`/`sell`, `long`/`short`, `B`/`S`, `BOT`/`SLD`, `BTO`/`STC`, `SS`… (case-insensitive) |
 | Quantity | yes | Shares (stocks), contracts (futures), lots (forex and spot commodities) or coins (crypto). Thousands separators allowed; a negative quantity is treated as its absolute value |
 | Entry price | yes | The fill price for one-row-per-execution files |
@@ -136,6 +136,13 @@ Every trade is resolved to an instrument, which gives it a **market** (asset cla
 | Crypto | coins | 1 | `BTCUSD`, `ETHUSD`, `SOLUSD`; `BTCUSDT`/`BTC-USD` are normalised to `BTCUSD` |
 
 How a symbol is resolved:
+
+0. **Clean-up.** Common spellings are normalised first: `EUR/USD` → `EURUSD`,
+   `BTC-USDT` → `BTCUSD`, `/ESZ6` → `ESZ6`, `ES1!` → `ES`. Broker account suffixes after
+   a dot are dropped when the rest is a market symbol, so **`XAUUSD.R` is treated as
+   `XAUUSD` and `EURUSD.R` as `EURUSD`** (also `.r`, `.m`, `.pro`, …). Rows with and
+   without the suffix belong to the same position. Dotted stock tickers such as `BRK.B`
+   are left alone.
 
 1. **Exact match** in the instrument table.
 2. **Futures contract code**: root + month code + year (`ESZ6`, `ESZ26`, `MNQH2027`)
