@@ -12,6 +12,7 @@ PAGES = {
     "Analytics": [
         st.Page("dashboard.py", title="Dashboard", icon="📊", url_path="dashboard", default=True),
         st.Page("calendar_view.py", title="Calendar", icon="📅", url_path="calendar"),
+        st.Page("reports.py", title="Reports", icon="📈", url_path="reports"),
     ],
     "Journal": [
         st.Page("trade_log.py", title="Trade log", icon="📋", url_path="trades"),

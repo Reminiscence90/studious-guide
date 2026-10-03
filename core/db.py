@@ -24,10 +24,13 @@ def database_url() -> str:
     return os.environ.get("TRADE_JOURNAL_DB_URL", DEFAULT_DB_URL)
 
 
-@cache
 def get_engine(url: str | None = None) -> Engine:
-    """Create (once per URL) the SQLAlchemy engine."""
-    url = url or database_url()
+    """The SQLAlchemy engine for ``url`` (default: :func:`database_url`), created once per URL."""
+    return _engine_for(url or database_url())
+
+
+@cache
+def _engine_for(url: str) -> Engine:
     if url.startswith("sqlite:///") and not url.startswith("sqlite:///:memory:"):
         Path(url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(url)
