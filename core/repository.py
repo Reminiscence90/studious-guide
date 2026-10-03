@@ -35,6 +35,8 @@ TRADE_COLUMNS = [
     "mistakes",
     "emotions",
     "tags",
+    "checklist_total",
+    "checklist_met",
 ]
 
 
@@ -53,7 +55,10 @@ def load_trades(
     False; the metrics functions ignore them either way.
     """
     stmt = select(Trade).options(
-        selectinload(Trade.tags), selectinload(Trade.account), selectinload(Trade.playbook)
+        selectinload(Trade.tags),
+        selectinload(Trade.account),
+        selectinload(Trade.playbook),
+        selectinload(Trade.checklist_results),
     )
     if account_ids:
         stmt = stmt.where(Trade.account_id.in_(list(account_ids)))
@@ -100,6 +105,8 @@ def load_trades(
                 "mistakes": by_cat["mistake"],
                 "emotions": by_cat["emotion"],
                 "tags": [f"{cat}: {n}" for cat in by_cat for n in by_cat[cat]],
+                "checklist_total": len(t.checklist_results),
+                "checklist_met": sum(r.met for r in t.checklist_results),
             }
         )
     df = pd.DataFrame(rows, columns=TRADE_COLUMNS)

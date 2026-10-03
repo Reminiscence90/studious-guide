@@ -14,13 +14,13 @@ GRID = "rgba(128,128,128,0.15)"
 
 
 def _layout(fig: go.Figure, height: int = 340, **kwargs: object) -> go.Figure:
-    fig.update_layout(
-        height=height,
-        margin={"l": 10, "r": 10, "t": 30, "b": 10},
-        hovermode="x unified",
-        showlegend=False,
-        **kwargs,
-    )
+    layout: dict[str, object] = {
+        "height": height,
+        "margin": {"l": 10, "r": 10, "t": 30, "b": 10},
+        "hovermode": "x unified",
+        "showlegend": False,
+    }
+    fig.update_layout(**(layout | kwargs))
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(gridcolor=GRID, zerolinecolor="rgba(128,128,128,0.4)")
     return fig

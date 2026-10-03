@@ -295,3 +295,20 @@ def test_month_grid() -> None:
     assert all(len(week) == 7 for week in grid)
     days = [d for week in grid for d in week if d]
     assert len(days) == 30
+
+
+def test_rule_adherence_and_playbook_stats() -> None:
+    df = make_trades(
+        [100, -50, 30, 5],
+        playbook=["ORB", "ORB", "VWAP", None],
+        checklist_total=[3, 3, 2, 0],
+        checklist_met=[3, 1, 2, 0],
+    )
+    labels = m.rule_adherence(df)
+    assert labels[:3].tolist() == ["All criteria met", "Some criteria missed", "All criteria met"]
+    assert pd.isna(labels.iloc[3])
+    by_rules = m.breakdown(df, m.rule_adherence).set_index("group")
+    assert by_rules.loc["All criteria met", "net_pnl"] == 130
+    stats = m.playbook_stats(df)
+    assert stats["group"].tolist() == ["ORB", "VWAP"]  # sorted by net P&L
+    assert stats.set_index("group").loc["ORB", "win_rate"] == 0.5

@@ -17,6 +17,7 @@ PAGES = {
         st.Page("trade_log.py", title="Trade log", icon="📋", url_path="trades"),
         st.Page("trade_detail.py", title="Trade detail", icon="🔎", url_path="trade"),
         st.Page("journal.py", title="Daily journal", icon="📓", url_path="journal"),
+        st.Page("playbooks.py", title="Playbooks", icon="📘", url_path="playbooks"),
     ],
     "Data": [
         st.Page("import_trades.py", title="Import", icon="⬆️", url_path="import"),

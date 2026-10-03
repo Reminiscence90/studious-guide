@@ -445,6 +445,26 @@ def breakdown(
     return result.reset_index(drop=True)
 
 
+def rule_adherence(df: pd.DataFrame) -> pd.Series:
+    """Label each trade by playbook checklist adherence.
+
+    Needs ``checklist_total`` and ``checklist_met`` columns. Trades without a
+    checklist get None (and drop out of a breakdown).
+    """
+    if df.empty:
+        return pd.Series(dtype=object)
+    total, met = df["checklist_total"], df["checklist_met"]
+    labels = pd.Series(None, index=df.index, dtype=object)
+    labels[(total > 0) & (met == total)] = "All criteria met"
+    labels[(total > 0) & (met < total)] = "Some criteria missed"
+    return labels
+
+
+def playbook_stats(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-playbook breakdown (trades taken, win rate, net P&L, expectancy, ...)."""
+    return breakdown(df, "playbook", sort_by="net_pnl")
+
+
 # --------------------------------------------------------------------------- calendar
 
 
