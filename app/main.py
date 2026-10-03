@@ -9,9 +9,17 @@ from app.common import render_sidebar_filters
 st.set_page_config(page_title="Trade Journal", page_icon="📈", layout="wide")
 
 PAGES = {
+    "Analytics": [
+        st.Page("dashboard.py", title="Dashboard", icon="📊", url_path="dashboard", default=True),
+        st.Page("calendar_view.py", title="Calendar", icon="📅", url_path="calendar"),
+    ],
+    "Journal": [
+        st.Page("trade_detail.py", title="Trade detail", icon="🔎", url_path="trade"),
+        st.Page("journal.py", title="Daily journal", icon="📓", url_path="journal"),
+    ],
     "Data": [
-        st.Page("import_trades.py", title="Import", icon="⬆️", default=True),
-        st.Page("settings.py", title="Settings", icon="⚙️"),
+        st.Page("import_trades.py", title="Import", icon="⬆️", url_path="import"),
+        st.Page("settings.py", title="Settings", icon="⚙️", url_path="settings"),
     ],
 }
 

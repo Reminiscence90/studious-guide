@@ -8,12 +8,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from core.db import get_engine, init_db, session_scope
 from core.models import Account, Trade
+from core.repository import load_trades
 
 GREEN = "#16a34a"
 RED = "#dc2626"
@@ -159,3 +161,14 @@ def open_trade(trade_id: int) -> None:
     """Navigate to the trade detail page for a trade."""
     st.session_state["selected_trade_id"] = trade_id
     st.switch_page("trade_detail.py")
+
+
+def load_filtered_trades(filters: Filters | None = None) -> pd.DataFrame:
+    """All trades (open and closed) matching the sidebar filters."""
+    filters = filters or get_filters()
+    with db() as s:
+        return load_trades(s, filters.account_ids, filters.start, filters.end)
+
+
+def stat_tile(label: str, value: str, help: str | None = None) -> None:
+    st.metric(label, value, help=help, border=True)
