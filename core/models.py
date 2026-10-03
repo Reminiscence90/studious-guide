@@ -183,6 +183,13 @@ class Execution(Base):
     price: Mapped[float] = mapped_column(Float)
     timestamp: Mapped[datetime] = mapped_column(DateTime)
     fees: Mapped[float] = mapped_column(Float, default=0.0)
+    # Broker identifiers from order-history exports (optional).
+    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    position_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # Realised P&L the broker reported on a closing fill, in USD (optional).
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The broker's net realised P&L (after commission, incl. swap/financing), optional.
+    realized_net_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Fingerprint of the source row, used to skip duplicate imports.
     import_hash: Mapped[str] = mapped_column(String(64), index=True)
     source: Mapped[str] = mapped_column(String(32), default="csv")

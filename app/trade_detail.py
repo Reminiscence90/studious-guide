@@ -134,7 +134,14 @@ c = st.columns(4)
 c[0].metric("Entry time", f"{trade.entry_time:%d %b %y %H:%M}")
 c[1].metric("Exit time", "–" if trade.exit_time is None else f"{trade.exit_time:%d %b %y %H:%M}")
 c[2].metric("Holding time", format_duration(holding))
-c[3].metric("Gross P&L / fees", f"{trade.gross_pnl:,.2f} / {trade.fees:,.2f}")
+other = trade.net_pnl - (trade.gross_pnl - trade.fees)
+c[3].metric(
+    "Gross P&L / fees" + (" / swap" if abs(other) >= 0.005 else ""),
+    f"{trade.gross_pnl:,.2f} / {trade.fees:,.2f}"
+    + (f" / {other:+,.2f}" if abs(other) >= 0.005 else ""),
+    help="Net P&L = gross − fees" + (" + swap/financing (from the broker's net P&L)"
+                                     if abs(other) >= 0.005 else ""),
+)  # fmt: skip
 
 left, right = st.columns([3, 2], gap="large")
 

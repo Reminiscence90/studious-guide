@@ -110,7 +110,8 @@ def test_rows_to_executions_round_trip_rows_become_two_fills() -> None:
         "exit_time": "OutT",
         "fees": "Fee",
     }
-    fills, errors = rows_to_executions(df, mapping)
+    parsed = rows_to_executions(df, mapping)
+    fills, errors = parsed.fills, parsed.errors
     assert errors == []
     assert [(f.symbol, f.side, f.quantity, f.price, f.fees) for f in fills] == [
         ("ABC", SELL, 1000.0, 10.0, 2.0),
@@ -123,7 +124,8 @@ def test_rows_to_executions_collects_row_errors() -> None:
         {"s": ["A", "B"], "d": ["buy", "??"], "q": [1, 1], "p": [1, 1], "t": ["2026-01-01"] * 2}
     )
     mapping = {"symbol": "s", "side": "d", "quantity": "q", "entry_price": "p", "entry_time": "t"}
-    fills, errors = rows_to_executions(df, mapping)
+    parsed = rows_to_executions(df, mapping)
+    fills, errors = parsed.fills, parsed.errors
     assert len(fills) == 1
     assert errors == ["Row 3: Unrecognised side value: '??'"]
 
@@ -131,7 +133,7 @@ def test_rows_to_executions_collects_row_errors() -> None:
 def test_rows_to_executions_with_explicit_datetime_format() -> None:
     df = pd.DataFrame({"s": ["A"], "d": ["B"], "q": [1], "p": [2], "t": ["03/06/2026 14:05"]})
     mapping = {"symbol": "s", "side": "d", "quantity": "q", "entry_price": "p", "entry_time": "t"}
-    fills, _ = rows_to_executions(df, mapping, "%d/%m/%Y %H:%M")
+    fills = rows_to_executions(df, mapping, "%d/%m/%Y %H:%M").fills
     assert fills[0].timestamp == datetime(2026, 6, 3, 14, 5)
 
 
@@ -393,7 +395,7 @@ def test_import_fills_with_no_fills(session: Session) -> None:
 def test_save_preset_overwrites(session: Session) -> None:
     save_preset(session, "Broker", {"symbol": "A", "side": None})
     save_preset(session, "Broker", {"symbol": "B"}, "%Y")
-    preset = session.scalars(select(BrokerPreset)).one()
+    preset = session.scalars(select(BrokerPreset).where(BrokerPreset.name == "Broker")).one()
     assert preset.mapping == {"symbol": "B"}
     assert preset.datetime_format == "%Y"
 

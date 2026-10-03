@@ -11,8 +11,9 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from core.importer import BUILTIN_PRESETS
 from core.instruments import DEFAULT_INSTRUMENTS
-from core.models import DEFAULT_TAGS, Account, Base, Instrument, Tag
+from core.models import DEFAULT_TAGS, Account, Base, BrokerPreset, Instrument, Tag
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("TRADE_JOURNAL_DATA_DIR", PROJECT_ROOT / "data"))
@@ -51,6 +52,7 @@ def init_db(engine: Engine | None = None) -> Engine:
     engine = engine or get_engine()
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
+    _ensure_builtin_presets(engine)
     with Session(engine) as session:
         if session.scalar(select(Account.id).limit(1)) is None:
             session.add(Account(name="Main"))
@@ -72,9 +74,25 @@ def init_db(engine: Engine | None = None) -> Engine:
     return engine
 
 
+def _ensure_builtin_presets(engine: Engine) -> None:
+    """Add the built-in broker presets that are missing (user edits are kept)."""
+    with Session(engine) as session:
+        names = set(session.scalars(select(BrokerPreset.name)))
+        for name, (mapping, fmt) in BUILTIN_PRESETS.items():
+            if name not in names:
+                session.add(BrokerPreset(name=name, mapping=dict(mapping), datetime_format=fmt))
+        session.commit()
+
+
 # Columns added after the first release: (table, column, DDL type). ``create_all`` only
 # creates missing tables, so existing databases get these with ALTER TABLE.
-_LATE_COLUMNS = [("executions", "raw_symbol", "VARCHAR(32)")]
+_LATE_COLUMNS = [
+    ("executions", "raw_symbol", "VARCHAR(32)"),
+    ("executions", "order_id", "VARCHAR(64)"),
+    ("executions", "position_id", "VARCHAR(64)"),
+    ("executions", "realized_pnl", "FLOAT"),
+    ("executions", "realized_net_pnl", "FLOAT"),
+]
 
 
 def _add_missing_columns(engine: Engine) -> None:

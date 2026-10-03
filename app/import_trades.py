@@ -10,13 +10,16 @@ from sqlalchemy import select
 
 from app.common import accounts, db
 from core.importer import (
-    ALL_FIELDS,
+    FIELD_HELP,
     FIELD_LABELS,
+    ORDER_HISTORY_FIELDS,
     REQUIRED_FIELDS,
     ImportError_,
     add_manual_trade,
+    detect_preset,
     guess_mapping,
     import_dataframe,
+    rows_to_executions,
     save_preset,
     validate_mapping,
 )
@@ -40,9 +43,11 @@ with csv_tab:
     uploaded = st.file_uploader("Broker CSV export", type=["csv"])
     if uploaded is None:
         st.info(
-            "Upload a CSV with one row per execution (fill) or one row per round trip. "
-            "Partial fills are grouped into trades automatically and rows that were already "
-            "imported are skipped. Try `sample_data/sample_trades.csv`."
+            "Upload a broker export. Three layouts work: one row per **order** (order "
+            "history, e.g. Alchemy Markets — detected automatically), one row per "
+            "**fill**, or one row per **round trip**. Cancelled orders are ignored, partial "
+            "fills are grouped into trades and rows that were already imported are skipped. "
+            "Try `sample_data/sample_trades.csv`."
         )
     else:
         try:
@@ -50,43 +55,84 @@ with csv_tab:
         except Exception as exc:
             st.error(f"Could not read CSV: {exc}")
             st.stop()
-        st.caption(f"{len(df)} rows, {len(df.columns)} columns")
-        st.dataframe(df.head(10), hide_index=True, width="stretch")
 
         with db() as s:
             presets = {p.name: (dict(p.mapping), p.datetime_format) for p in s.scalars(
                 select(BrokerPreset).order_by(BrokerPreset.name))}  # fmt: skip
-        preset_name = st.selectbox("Broker preset", ["Auto-detect", *presets])
-        if preset_name == "Auto-detect":
+        detected = detect_preset(df.columns, {n: mp for n, (mp, _) in presets.items()})
+        choices = ["Auto-detect columns", *presets]
+        preset_name = st.selectbox(
+            "Broker format",
+            choices,
+            index=choices.index(detected) if detected else 0,
+            key=f"preset_{uploaded.name}",
+        )
+        if detected and preset_name == detected:
+            st.success(f"Detected **{detected}** — columns are mapped for you.")
+        if preset_name == "Auto-detect columns":
             initial, initial_fmt = guess_mapping(df.columns), None
         else:
             initial, initial_fmt = presets[preset_name]
 
-        st.subheader("Column mapping")
-        st.caption(
-            "Map exit price/time for round-trip rows. Leave them unmapped if each row is a "
-            "single execution — then *entry price/time* means the fill price/time."
-        )
+        with st.expander(f"Preview: {len(df)} rows, {len(df.columns)} columns"):
+            st.dataframe(df.head(20), hide_index=True, width="stretch")
+
         options = [NONE, *df.columns]
         mapping: dict[str, str | None] = {}
-        cols = st.columns(4)
-        for i, fld in enumerate(ALL_FIELDS):
-            default = initial.get(fld)
-            index = options.index(default) if default in options else 0
-            label = FIELD_LABELS[fld] + (" *" if fld in REQUIRED_FIELDS else "")
-            choice = cols[i % 4].selectbox(
-                label, options, index=index, key=f"map_{preset_name}_{fld}"
+
+        def mapping_inputs(fields: tuple[str, ...], ncols: int = 4) -> None:
+            cols = st.columns(ncols)
+            for i, fld in enumerate(fields):
+                default = initial.get(fld)
+                index = options.index(default) if default in options else 0
+                label = FIELD_LABELS[fld] + (" *" if fld in REQUIRED_FIELDS else "")
+                choice = cols[i % ncols].selectbox(
+                    label,
+                    options,
+                    index=index,
+                    help=FIELD_HELP.get(fld),
+                    key=f"map_{preset_name}_{fld}",
+                )
+                mapping[fld] = None if choice == NONE else choice
+
+        with st.expander("Column mapping", expanded=not detected):
+            st.markdown("**Every format**")
+            mapping_inputs((*REQUIRED_FIELDS, "fees"), ncols=3)
+            st.markdown("**Order-history exports** (one row per order)")
+            st.caption(
+                "Map these when the export lists orders: only filled orders are imported, "
+                "fills are grouped by position ID, the broker's P&L is used and the stop "
+                "loss is taken from the stop-loss order."
             )
-            mapping[fld] = None if choice == NONE else choice
-        dt_format = st.text_input(
-            "Date/time format (optional, strftime syntax, e.g. `%d/%m/%Y %H:%M`)",
-            value=initial_fmt or "",
-            help="Leave blank to auto-detect.",
-        )
+            mapping_inputs(ORDER_HISTORY_FIELDS, ncols=4)
+            st.markdown("**Round-trip rows** (entry and exit on one row)")
+            mapping_inputs(("exit_price", "exit_time"), ncols=2)
+            dt_format = st.text_input(
+                "Date/time format (optional, strftime syntax, e.g. `%d/%m/%Y %H:%M`)",
+                value=initial_fmt or "",
+                help="Leave blank to auto-detect.",
+            )
 
         problems = validate_mapping(mapping, df.columns)
         for p in problems:
             st.warning(p)
+
+        if not problems:
+            try:
+                parsed = rows_to_executions(df, mapping, dt_format.strip() or None)
+            except ImportError_ as exc:
+                st.error(str(exc))
+                problems = [str(exc)]
+            else:
+                positions = {(f.symbol, f.position_id) for f in parsed.fills if f.position_id}
+                parts = [f"**{len(parsed.fills)} fills** from {len(df)} rows"]
+                if parsed.skipped:
+                    parts.append(f"{parsed.skipped} cancelled / unfilled orders ignored")
+                if positions:
+                    parts.append(f"{len(positions)} positions")
+                if parsed.errors:
+                    parts.append(f"{len(parsed.errors)} rows with errors")
+                st.info("Ready to import: " + " · ".join(parts))
 
         save_col, import_col = st.columns(2)
         with save_col:
@@ -110,11 +156,14 @@ with csv_tab:
                     st.error(str(exc))
                 else:
                     st.success(
-                        f"Read {result.rows_read} rows → imported {result.executions_imported} "
-                        f"executions, created {result.trades_created} trades, updated "
-                        f"{result.trades_updated} open trades. Skipped "
-                        f"{result.duplicates_skipped} duplicate executions."
+                        f"Imported {result.executions_imported} fills → "
+                        f"{result.trades_created} new trades, {result.trades_updated} open "
+                        f"trades updated. Skipped {result.duplicates_skipped} already-imported "
+                        f"fills and {result.rows_skipped} cancelled / unfilled orders."
                     )
+                    if result.warnings:
+                        with st.expander(f"ℹ️ {len(result.warnings)} positions not imported"):
+                            st.write("\n".join(f"- {w}" for w in result.warnings))
                     if result.errors:
                         with st.expander(f"⚠️ {len(result.errors)} rows could not be imported"):
                             st.write("\n".join(f"- {e}" for e in result.errors))

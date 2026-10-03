@@ -54,9 +54,11 @@ journal, skip the seed step; the app creates a default `Main` account (USD).
 
 ## CSV format
 
-Any CSV with a header row works. On the **Import** page, pick which column holds each
-field (common header names are detected for you), then optionally save the mapping as
-a broker preset so it's prefilled next time.
+Any CSV with a header row works. On the **Import** page the app recognises known broker
+exports (**Alchemy Markets** order history is built in) and maps the columns for you;
+otherwise common header names are detected and you can adjust the mapping and save it as
+a broker preset. Before importing, the page previews how many fills, ignored orders and
+positions it found.
 
 | Field | Required | Notes |
 |---|---|---|
@@ -68,8 +70,15 @@ a broker preset so it's prefilled next time.
 | Exit price | no | Map together with exit time for round-trip rows |
 | Exit time | no | |
 | Fees | no | Commission plus other charges. On round-trip rows, half goes to each leg |
+| Order status | no | Order-history exports: only filled orders are imported (`Filled`, `Partially filled`, `Executed`…); cancelled, rejected and working orders are ignored. Rows with quantity 0 are always ignored |
+| Order type | no | `Stop Loss` / `Take Profit` orders are closing fills |
+| Stop price | no | The stop of the position's `Stop Loss` order becomes the trade's stop loss |
+| Position ID | no | Fills with the same broker position ID form one trade |
+| Order ID | no | Used to skip orders that were already imported |
+| Closed P&L | no | Broker's realised P&L (USD) on closing fills, used as gross P&L |
+| Net closed P&L | no | Broker's realised P&L after commission and swap, used as net P&L |
 
-Two layouts are supported:
+Three layouts are supported:
 
 1. **One row per execution (fill).** Map symbol, side, quantity, entry price/time and
    fees; leave exit price/time unmapped.
@@ -98,6 +107,33 @@ Two layouts are supported:
    That is +$823.00 on TSLA, +$1,241.00 on ES (12.5 points × 2 contracts × $50) and
    +$141.50 on EURUSD (29 pips × 0.5 lot × $10), each after fees.
 
+3. **Broker order history** (one row per order, e.g. Alchemy Markets). Detected
+   automatically from the header:
+
+   ```csv
+   Symbol,Side,Type,Qty,Filled Qty,Limit Price,Stop Price,Avg Fill Price,Status,Update Time,Position ID,Commission,Closed P&L,Net Closed P&L,Order ID
+   XAUUSD.R,Sell,Limit,0.5,0.5,4350,,4350.00,Filled,2026-09-17 01:20:19,XAUUSD.R:3000,-0.75,,,3000
+   XAUUSD.R,Buy,Take Profit,0.5,0,4329.3,,,Cancelled,2026-09-17 01:59:55,,0.0,,,3001
+   XAUUSD.R,Buy,Stop Loss,0.5,0.5,,4360,4360.20,Filled,2026-09-17 01:20:19,XAUUSD.R:3000,-0.75,-510.00,-511.50,3002
+   ```
+
+   Built-in mapping: `Filled Qty` (not `Qty`), `Avg Fill Price`, `Update Time`,
+   `Commission`, plus the order-history columns above. The example is **one short
+   XAUUSD trade** of 0.5 lot with a stop loss of 4360, net **−$511.50**. The cancelled
+   take-profit order is ignored. How the import handles this format:
+   * **One trade per position.** Fills are grouped by `Position ID`, so a hedging account
+     with two XAUUSD positions open at once gets two trades.
+   * **The broker's P&L.** `Closed P&L` / `Net Closed P&L` are used, so totals match your
+     statement, including swap and crosses such as EURJPY.
+   * **Stop loss from the bracket.** The stop comes from the position's `Stop Loss`
+     order, linked by position ID or, for a cancelled bracket, by the order ID right
+     after the entry. Only a stop's last price is exported, so a stop that ended on the
+     profit side of the entry (moved to breakeven or trailed) is left empty instead of
+     producing a misleading R-multiple.
+   * **Exits whose entry is missing.** A closing fill whose opening fill falls before the
+     export's date range is skipped with a note. Import a longer range and it is added
+     then.
+
 `sample_data/sample_trades.csv` uses the second layout. It has 245 rows that group into
 207 trades across US stocks (TSLA is the most traded), futures (ES, MES, MNQ), commodities
 (CL, GC, XAUUSD), forex (EURUSD, GBPUSD, USDJPY) and crypto (BTCUSD, ETHUSD), because some
@@ -106,19 +142,21 @@ positions were scaled out of across several rows. Times are US Eastern. It was m
 
 ### How trades are built
 
-* **Grouping.** Each row becomes one execution, or two for a round-trip row. The
-  executions of each symbol are walked in time order while tracking the net position.
+* **Grouping.** Each row becomes one execution, or two for a round-trip row. Executions
+  with a broker position ID are grouped by that ID. The others are walked per symbol in
+  time order while tracking the net position.
   A trade starts when the position leaves zero and ends when it returns to zero, so all
   partial fills in between belong to one trade. A fill that flips the position (selling
   150 while long 100) is split: 100 closes the long, 50 opens a new short.
 * **Prices and P&L.** Average entry and exit are volume-weighted. Gross P&L is
   (avg exit − avg entry) × closed quantity × point value, sign-adjusted for shorts. Net
-  P&L is gross P&L minus all fees. All P&L is in USD.
+  P&L is gross P&L minus all fees. When the export includes the broker's realised P&L,
+  that is used instead. All P&L is in USD.
 * **Open positions.** A trade that hasn't returned to flat is stored as *open* and
   **left out of every statistic**. If a later import closes it, the executions are
   added to the same trade, so its notes and tags are kept.
-* **Duplicates.** Every execution gets a fingerprint (account, symbol, side, quantity,
-  price, time, fees). Fingerprints that are already in the account are skipped, so
+* **Duplicates.** Every execution gets a fingerprint: the broker order ID when mapped,
+  otherwise the account, symbol, side, quantity, price, time and fees. Fingerprints that are already in the account are skipped, so
   re-importing an overlapping export is safe. Identical rows within one file are told
   apart by how many times they occur, so two genuine identical fills both import.
 
@@ -267,8 +305,13 @@ pytest on every push and pull request.
 
 ## Limitations
 
-* All accounts are USD. Forex crosses without USD (EURGBP, EURJPY) are left in their
-  quote currency, because converting them needs a second exchange rate.
+* All accounts are USD. Forex crosses without USD (EURGBP, EURJPY) are converted only
+  when the export includes the broker's closed P&L (as order-history exports do).
+  Otherwise they stay in their quote currency, because converting them needs a second
+  exchange rate.
 * Options are not modelled. An option symbol is treated as a stock with multiplier 1.
-* Grouping is per account and symbol, so two overlapping positions in the same symbol
-  in one account are treated as one trade.
+* Without a position ID column, grouping is per account and symbol, so two overlapping
+  positions in the same symbol in one account are treated as one trade.
+* Order-history exports only show a stop order's final price, so a stop you moved
+  before it triggered is recorded at its last level (or left empty if it ended past
+  the entry). Edit it on the trade page if you need the original risk.
