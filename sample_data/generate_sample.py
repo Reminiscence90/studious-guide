@@ -156,10 +156,11 @@ def generate(seed: int = 42, n_trades: int = 205) -> list[dict[str, str]]:
             )
 
     # Two positions that are still open at the end of the sample period. Open
-    # positions are stored but excluded from all statistics.
+    # positions are stored but excluded from all statistics. The symbols are not
+    # traded again afterwards, so they stay open after grouping.
     for symbol, side, qty, price, stamp in [
-        ("TENAGA", "Long", 1000, 13.92, "2026-09-30 10:12:44"),
-        ("INARI", "Short", 3000, 2.910, "2026-09-30 15:03:10"),
+        ("GENTING", "Long", 2000, 4.31, "2026-09-30 10:12:44"),
+        ("GAMUDA", "Short", 2000, 5.12, "2026-09-30 15:03:10"),
     ]:
         rows.append(
             {

@@ -14,6 +14,7 @@ PAGES = {
         st.Page("calendar_view.py", title="Calendar", icon="📅", url_path="calendar"),
     ],
     "Journal": [
+        st.Page("trade_log.py", title="Trade log", icon="📋", url_path="trades"),
         st.Page("trade_detail.py", title="Trade detail", icon="🔎", url_path="trade"),
         st.Page("journal.py", title="Daily journal", icon="📓", url_path="journal"),
     ],
