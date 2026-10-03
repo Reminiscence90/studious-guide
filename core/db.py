@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from functools import cache
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, select
+from sqlalchemy import Engine, create_engine, event, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from core.instruments import DEFAULT_INSTRUMENTS
@@ -50,6 +50,7 @@ def init_db(engine: Engine | None = None) -> Engine:
     """Create tables and default rows: a USD account, the default tags and instrument specs."""
     engine = engine or get_engine()
     Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
     with Session(engine) as session:
         if session.scalar(select(Account.id).limit(1)) is None:
             session.add(Account(name="Main"))
@@ -69,6 +70,20 @@ def init_db(engine: Engine | None = None) -> Engine:
             )
         session.commit()
     return engine
+
+
+# Columns added after the first release: (table, column, DDL type). ``create_all`` only
+# creates missing tables, so existing databases get these with ALTER TABLE.
+_LATE_COLUMNS = [("executions", "raw_symbol", "VARCHAR(32)")]
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, ddl in _LATE_COLUMNS:
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
 @contextmanager

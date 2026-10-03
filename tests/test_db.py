@@ -49,3 +49,24 @@ def test_deleting_account_cascades_to_trades(session: Session) -> None:
     session.flush()
     assert session.scalars(select(Trade)).all() == []
     assert session.scalars(select(Execution)).all() == []
+
+
+def test_init_db_adds_raw_symbol_to_older_databases() -> None:
+    from sqlalchemy import create_engine, inspect, text
+
+    from core.db import init_db
+
+    engine = create_engine("sqlite://")
+    with engine.begin() as conn:  # executions table as created by the first release
+        conn.execute(
+            text(
+                "CREATE TABLE executions (id INTEGER PRIMARY KEY, account_id INTEGER, "
+                "trade_id INTEGER, symbol VARCHAR(32), side VARCHAR(4), quantity FLOAT, "
+                "price FLOAT, timestamp DATETIME, fees FLOAT, import_hash VARCHAR(64), "
+                "source VARCHAR(32))"
+            )
+        )
+    init_db(engine)
+    columns = {c["name"] for c in inspect(engine).get_columns("executions")}
+    assert "raw_symbol" in columns
+    init_db(engine)  # idempotent

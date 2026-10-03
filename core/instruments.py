@@ -146,6 +146,12 @@ def normalise_symbol(raw: str, known: Collection[str] = ()) -> str:
     return s
 
 
+def has_broker_suffix(raw: str, known: Collection[str] = ()) -> bool:
+    """True when ``raw`` carries a broker account suffix that :func:`normalise_symbol`
+    drops, e.g. ``XAUUSD.R`` or ``EURUSD.r`` (but not ``BRK.B``)."""
+    return "." in str(raw) and "." not in normalise_symbol(raw, known)
+
+
 def _is_market_symbol(symbol: str, known: Collection[str]) -> bool:
     """True for catalog/known instruments, forex pairs and crypto pairs."""
     if symbol in known or symbol in _CATALOG_SYMBOLS:

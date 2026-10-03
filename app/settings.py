@@ -61,7 +61,9 @@ st.caption(
     "P&L = price move × quantity × multiplier. Futures: quantity in contracts, multiplier = "
     "$ per point (ES 50, NQ 20, CL 1,000). Forex: quantity in lots, multiplier 100,000 "
     "(set 1 if your broker exports units); USD-base pairs such as USDJPY are converted to "
-    "USD at the exit price. Futures contract codes (ESZ6, MNQH27) match their root. Symbols "
+    "USD at the exit price. Futures contract codes (ESZ6, MNQH27) match their root. "
+    "Broker-suffixed symbols (XAUUSD.R, EURUSD.R) use the base symbol's multiplier and are "
+    "classed as Forex. Symbols "
     "not listed are treated as US stocks with multiplier 1."
 )
 with db() as s:

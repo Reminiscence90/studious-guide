@@ -176,6 +176,8 @@ class Execution(Base):
         ForeignKey("trades.id", ondelete="CASCADE"), nullable=True
     )
     symbol: Mapped[str] = mapped_column(String(32))
+    # Symbol exactly as imported (e.g. "XAUUSD.R"); ``symbol`` is the normalised form.
+    raw_symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
     side: Mapped[ExecutionSide] = mapped_column(Enum(ExecutionSide, native_enum=False))
     quantity: Mapped[float] = mapped_column(Float)
     price: Mapped[float] = mapped_column(Float)

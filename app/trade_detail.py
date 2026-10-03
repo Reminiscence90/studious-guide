@@ -95,7 +95,8 @@ with db() as s:
     all_tags = list(s.scalars(select(Tag).order_by(Tag.name)))
     playbooks = list(s.scalars(select(Playbook).options(selectinload(Playbook.checklist_items))))
     executions = [
-        (e.timestamp, e.side.value, e.quantity, e.price, e.fees, e.source) for e in trade.executions
+        (e.timestamp, e.raw_symbol or e.symbol, e.side.value, e.quantity, e.price, e.fees, e.source)
+        for e in trade.executions
     ]
 
 cur = ACCOUNT_CURRENCY
@@ -186,11 +187,12 @@ with left:
     st.dataframe(
         {
             "Time": [e[0] for e in executions],
-            "Side": [e[1] for e in executions],
-            "Qty": [e[2] for e in executions],
-            "Price": [e[3] for e in executions],
-            "Fees": [e[4] for e in executions],
-            "Source": [e[5] for e in executions],
+            "Symbol": [e[1] for e in executions],
+            "Side": [e[2] for e in executions],
+            "Qty": [e[3] for e in executions],
+            "Price": [e[4] for e in executions],
+            "Fees": [e[5] for e in executions],
+            "Source": [e[6] for e in executions],
         },
         hide_index=True,
         width="stretch",

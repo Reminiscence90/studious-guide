@@ -487,6 +487,47 @@ def test_broker_suffix_is_treated_as_base_symbol(session: Session) -> None:
     assert trades["XAUUSD"].gross_pnl == pytest.approx(10 * 0.5 * 100)
     assert trades["EURUSD"].gross_pnl == pytest.approx(0.005 * 100_000)
     assert trades["EURUSD"].asset_class is AssetClass.FOREX
+    # Broker-suffixed symbols fall under forex, keeping the base contract size.
+    assert trades["XAUUSD"].asset_class is AssetClass.FOREX
+    assert trades["XAUUSD"].point_value == 100
+    raw = {e.raw_symbol for e in session.scalars(select(Execution))}
+    assert raw == {"XAUUSD.R", "XAUUSD", "EURUSD.R"}  # as imported, upper-cased
+
+
+def test_plain_spot_gold_stays_a_commodity(session: Session) -> None:
+    gold = _round_trip(session, "XAUUSD", BUY, 0.1, 3400.0, 3405.0)
+    assert gold.asset_class is AssetClass.COMMODITY
+
+
+def test_suffixed_classification_survives_recalculation(session: Session) -> None:
+    gold = _round_trip(session, "XAUUSD.R", BUY, 0.1, 3400.0, 3405.0)
+    assert (gold.symbol, gold.asset_class) == ("XAUUSD", AssetClass.FOREX)
+    recalculate_trades(session)
+    session.refresh(gold)
+    assert gold.asset_class is AssetClass.FOREX
+    assert gold.gross_pnl == pytest.approx(5 * 0.1 * 100)
+
+
+def test_manual_trade_with_broker_suffix(session: Session) -> None:
+    trade = add_manual_trade(
+        session,
+        1,
+        symbol="eurusd.r",
+        side=TradeSide.LONG,
+        quantity=1,
+        entry_price=1.1600,
+        entry_time=t("09:30"),
+        exit_price=1.1625,
+        exit_time=t("10:30"),
+        stop_loss=1.1580,
+    )
+    assert trade is not None
+    assert (trade.symbol, trade.asset_class, trade.stop_loss) == (
+        "EURUSD",
+        AssetClass.FOREX,
+        1.1580,
+    )
+    assert trade.gross_pnl == pytest.approx(250)
 
 
 def test_unknown_symbol_is_a_us_stock(session: Session) -> None:

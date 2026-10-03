@@ -31,6 +31,7 @@ from core.instruments import (
     AssetClass,
     InstrumentSpec,
     default_specs,
+    has_broker_suffix,
     normalise_symbol,
     point_value,
     resolve,
@@ -104,6 +105,8 @@ class Fill:
     timestamp: datetime
     fees: float = 0.0
     import_hash: str = ""
+    # Symbol as it appeared in the source (e.g. "XAUUSD.R"); empty means same as symbol.
+    raw_symbol: str = ""
 
     @property
     def signed_quantity(self) -> float:
@@ -155,6 +158,7 @@ class ImportResult:
     trades_created: int = 0
     trades_updated: int = 0
     errors: list[str] = field(default_factory=list)
+    trade_ids: list[int] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +292,8 @@ def rows_to_executions(
     for pos, (_, row) in enumerate(df.iterrows()):
         line = pos + 2  # header is line 1
         try:
-            symbol = normalise_symbol(col(row, "symbol"))
+            # Kept as written; import_fills normalises it (XAUUSD.R → XAUUSD).
+            symbol = str(col(row, "symbol")).strip().upper()
             if not symbol or symbol == "NAN":
                 raise ImportError_("missing symbol")
             side = parse_side(col(row, "side"))
@@ -491,15 +496,34 @@ def recalculate_trades(session: Session) -> int:
         if not fills:
             continue
         is_closed = trade.status is TradeStatus.CLOSED
-        _apply_summary(
-            trade, summarize_fills(fills, trade.side, is_closed, resolve(trade.symbol, specs))
-        )
+        spec = spec_for(trade.symbol, fills, specs)
+        _apply_summary(trade, summarize_fills(fills, trade.side, is_closed, spec))
     session.flush()
     return len(trades)
 
 
 def _fill_from_execution(e: Execution) -> Fill:
-    return Fill(e.symbol, e.side, e.quantity, e.price, e.timestamp, e.fees, e.import_hash)
+    return Fill(
+        e.symbol,
+        e.side,
+        e.quantity,
+        e.price,
+        e.timestamp,
+        e.fees,
+        e.import_hash,
+        e.raw_symbol or e.symbol,
+    )
+
+
+def spec_for(
+    symbol: str, fills: Sequence[Fill], specs: dict[str, InstrumentSpec]
+) -> InstrumentSpec:
+    """Instrument spec for a trade. Trades executed with a broker-suffixed symbol
+    (``XAUUSD.R``, ``EURUSD.R``) are classed as forex; contract size is unchanged."""
+    spec = resolve(symbol, specs)
+    if any(has_broker_suffix(f.raw_symbol or f.symbol, specs) for f in fills):
+        spec = replace(spec, asset_class=AssetClass.FOREX)
+    return spec
 
 
 def import_fills(
@@ -516,7 +540,10 @@ def import_fills(
     """
     result = ImportResult()
     specs = load_specs(session)
-    fills = [replace(f, symbol=normalise_symbol(f.symbol, specs)) for f in fills]
+    fills = [
+        replace(f, raw_symbol=f.raw_symbol or f.symbol, symbol=normalise_symbol(f.symbol, specs))
+        for f in fills
+    ]
     fills = assign_fingerprints(account_id, fills)
     hashes = [f.import_hash for f in fills]
     existing: set[str] = set()
@@ -558,7 +585,7 @@ def import_fills(
             session.flush()
 
         for i, group in enumerate(group_executions(prior + sym_fills)):
-            summary = group.summary(resolve(symbol, specs))
+            summary = group.summary(spec_for(symbol, group.fills, specs))
             if i == 0 and open_trade is not None:
                 trade = open_trade
                 result.trades_updated += 1
@@ -568,12 +595,14 @@ def import_fills(
                 result.trades_created += 1
             _apply_summary(trade, summary)
             session.flush()
+            result.trade_ids.append(trade.id)
             for f in group.fills:
                 session.add(
                     Execution(
                         account_id=account_id,
                         trade_id=trade.id,
                         symbol=f.symbol,
+                        raw_symbol=f.raw_symbol or f.symbol,
                         side=f.side,
                         quantity=f.quantity,
                         price=f.price,
@@ -625,7 +654,7 @@ def add_manual_trade(
         raise ImportError_("Provide both exit price and exit time, or neither")
     if exit_time is not None and exit_time < entry_time:
         raise ImportError_("Exit time is before entry time")
-    symbol = normalise_symbol(symbol)
+    symbol = symbol.strip().upper()
     if not symbol:
         raise ImportError_("Symbol is required")
     entry_side = ExecutionSide.BUY if side is TradeSide.LONG else ExecutionSide.SELL
@@ -641,11 +670,7 @@ def add_manual_trade(
     result = import_fills(session, account_id, fills, source="manual")
     if result.executions_imported == 0:
         return None
-    trade = session.scalars(
-        select(Trade)
-        .join(Execution)
-        .where(Execution.import_hash == assign_fingerprints(account_id, fills)[-1].import_hash)
-    ).first()
+    trade = session.get(Trade, result.trade_ids[-1])
     if trade is not None:
         if stop_loss is not None:
             trade.stop_loss = stop_loss
