@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.common import db, fmt_money
 from app.lwc_chart import render_chart
+from core.data_sources import SOURCE_LABELS, ChartSource, chart_source, credentials
 from core.demo_market import demo_fetcher
 from core.importer import load_specs
 from core.instruments import default_chart_symbol, resolve
@@ -18,7 +19,6 @@ from core.market_data import (
     INTERVALS,
     MarketDataError,
     auto_interval,
-    fetch_yahoo,
     get_bars,
     import_ohlc,
     local_intervals,
@@ -31,9 +31,14 @@ from core.models import Trade
 from core.review import ExecutionPoint, chart_payload, excursions, planned_rr
 
 SOURCES = {
-    "yahoo": "Yahoo Finance",
+    **SOURCE_LABELS,
     "csv": "your uploaded candles",
     "demo": "synthetic demo candles (sample data only)",
+}
+HISTORY_HINT = {
+    "yahoo": " Yahoo Finance keeps 1-minute candles for about 30 days and 5–30 minute "
+    "candles for 60 days: pick a coarser interval for older trades, add an OANDA token or "
+    "Twelve Data key under Settings → Market data, or upload your own candles below.",
 }
 
 
@@ -51,6 +56,7 @@ def render_trade_review(trade_id: int) -> None:
         spec = resolve(trade.symbol, load_specs(s))
         tz = trade.account.timezone or "UTC"
         is_demo = bool(trade.account.is_demo)
+        creds = credentials(s)
         fills = [
             ExecutionPoint(e.timestamp, e.side.value, e.quantity, e.price) for e in trade.executions
         ]
@@ -65,7 +71,9 @@ def render_trade_review(trade_id: int) -> None:
             "qty": trade.quantity,
             "pv": trade.point_value,
         }
-    chart_symbol = default_chart_symbol(spec)
+    src = chart_source(spec, creds)
+    if is_demo:  # sample data: synthetic candles, keyed by the default ticker
+        src = ChartSource("demo", default_chart_symbol(spec), src.fetch)
     upload_key = f"upload:{spec.symbol}"  # your own candles for this instrument
     now = utcnow()
     entry_utc = to_utc(t["entry_time"], tz)
@@ -78,7 +86,11 @@ def render_trade_review(trade_id: int) -> None:
             s, upload_key, entry_utc - timedelta(days=1), (exit_utc or now) + timedelta(days=1)
         )
     auto = auto_interval(
-        entry_utc, exit_utc, now, history_limits=not is_demo, local_intervals=uploaded
+        entry_utc,
+        exit_utc,
+        now,
+        history_limits=src.source == "yahoo",
+        local_intervals=uploaded,
     )
     choice = c1.selectbox("Interval", ["Auto", *INTERVALS], key=f"review_interval_{trade_id}")
     interval = auto if choice == "Auto" else choice
@@ -86,7 +98,7 @@ def render_trade_review(trade_id: int) -> None:
         "synthetic demo candles"
         if is_demo
         else f"your uploaded **{spec.symbol}** candles where available, otherwise "
-        f"**{chart_symbol}** from Yahoo Finance"
+        f"**{src.ticker}** from {src.label} (change under Settings → Instruments)"
     )
     c2.caption(
         (f"Auto picked **{interval}** · " if choice == "Auto" else "")
@@ -99,25 +111,26 @@ def render_trade_review(trade_id: int) -> None:
     with db() as s:
         bars, source = get_bars(s, upload_key, interval, start, end, fetch=None)
     if bars.empty:
+        key = f"demo:{src.ticker}" if is_demo else src.cache_key
         try:
             with db() as s:
                 if refresh:
-                    fresh = fetch_yahoo(chart_symbol, interval, start, end)
-                    store_bars(s, chart_symbol, interval, fresh, "yahoo")
-                fetch = demo_fetcher(s) if is_demo else fetch_yahoo
-                bars, source = get_bars(s, chart_symbol, interval, start, end, fetch=fetch)
+                    fresh = src.fetch(src.ticker, interval, start, end)
+                    store_bars(s, key, interval, fresh, src.source)
+                fetch = demo_fetcher(s) if is_demo else src.fetch
+                bars, source = get_bars(
+                    s, key, interval, start, end, fetch=fetch, ticker=src.ticker
+                )
         except MarketDataError as exc:
             error = str(exc)
             with db() as s:
-                bars, source = get_bars(s, chart_symbol, interval, start, end, fetch=None)
+                bars, source = get_bars(s, key, interval, start, end, fetch=None)
 
     if bars.empty:
         st.info(
-            f"No {interval} candles for **{chart_symbol}** around this trade"
-            + (f" — {error}" if error else "")
-            + ". Yahoo Finance keeps 1-minute bars for about 30 days and 5–30 minute bars "
-            "for 60 days; pick a coarser interval for older trades, or upload your own "
-            "candles below."
+            f"No {interval} candles for **{src.ticker}** ({src.label}) around this trade"
+            + (f" — {error}" if error else ".")
+            + HISTORY_HINT.get(src.source, " Upload your own candles below.")
         )
     else:
         if error:
@@ -139,11 +152,11 @@ def render_trade_review(trade_id: int) -> None:
         note = SOURCES.get(source or "", source or "")
         if source == "csv":
             note = f"your uploaded {spec.symbol} candles"
-        elif source == "yahoo":
-            note += f" ({chart_symbol})"
+        elif source in SOURCE_LABELS:
+            note += f" ({src.ticker})"
         if source == "yahoo" and spec.symbol in {"XAUUSD", "XAGUSD", "USOIL", "UKOIL"}:
-            note += f" — {chart_symbol} is the futures contract and trades a little away "
-            note += "from your broker's spot price; upload your broker's candles for exact levels"
+            note += f" — {src.ticker} is the futures contract and trades a little away from "
+            note += "spot; add an OANDA token or Twelve Data key for spot prices"
         st.caption(f"Source: {note}. Markers show each fill; lines show entry, exit, stop and "
                    "target.")  # fmt: skip
 

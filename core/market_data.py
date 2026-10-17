@@ -15,11 +15,8 @@ A coarser interval is built from cached finer bars when possible, so one upload 
 
 from __future__ import annotations
 
-import json
 import math
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -28,6 +25,7 @@ import pandas as pd
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from core import http
 from core.models import PriceBar
 
 # label -> seconds, finest first
@@ -178,9 +176,7 @@ def resample(bars: pd.DataFrame, interval: str) -> pd.DataFrame:
 
 
 def _http_get_json(url: str) -> dict:
-    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 trade-journal"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.load(response)
+    return http.get_json(url)
 
 
 def parse_yahoo_chart(payload: dict) -> pd.DataFrame:
@@ -236,10 +232,8 @@ def fetch_yahoo(
         )
         try:
             chunks.append(parse_yahoo_chart(get_json(url)))
-        except urllib.error.HTTPError as exc:
-            raise MarketDataError(f"Yahoo Finance returned HTTP {exc.code} for {ticker}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise MarketDataError(f"Could not reach Yahoo Finance: {exc}") from exc
+        except http.HttpError as exc:
+            raise MarketDataError(f"Yahoo Finance: {exc}") from exc
         chunk_start = chunk_end
     if not chunks:
         return pd.DataFrame(columns=BAR_COLUMNS)
@@ -387,16 +381,18 @@ def get_bars(
     start: datetime,
     end: datetime,
     fetch: Fetcher | None = fetch_yahoo,
+    ticker: str | None = None,
 ) -> tuple[pd.DataFrame, str | None]:
     """Bars for the review chart: from the cache when it covers the range (uploaded bars
     are always used as they are), otherwise downloaded and cached.
 
-    Returns (bars, source). ``fetch=None`` never downloads.
+    ``chart_symbol`` is the cache key; ``ticker`` (default: the same) is what ``fetch`` is
+    asked for. Returns (bars, source). ``fetch=None`` never downloads.
     """
     bars, source = cached_bars(session, chart_symbol, interval, start, end)
     if source == "csv" or fetch is None or _covers(bars, start, end, interval):
         return bars, source
-    downloaded = fetch(chart_symbol, interval, start, end)
+    downloaded = fetch(ticker or chart_symbol, interval, start, end)
     if downloaded.empty:
         return bars, source
     store_bars(session, chart_symbol, interval, downloaded, getattr(fetch, "source", "yahoo"))

@@ -744,6 +744,7 @@ def load_specs(session: Session) -> dict[str, InstrumentSpec]:
             row.quote_currency,
             row.name,
             row.chart_symbol or "",
+            row.data_source or "",
         )
         for row in session.scalars(select(Instrument))
     }
@@ -773,6 +774,7 @@ def replace_instruments(session: Session, specs: Sequence[InstrumentSpec]) -> No
             multiplier=s.multiplier,
             quote_currency=s.quote_currency,
             chart_symbol=s.chart_symbol.strip() or None,
+            data_source=s.data_source if s.data_source not in ("", "auto") else None,
         )
         for s in cleaned.values()
     )

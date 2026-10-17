@@ -95,6 +95,7 @@ _LATE_COLUMNS = [
     ("accounts", "timezone", "VARCHAR(64) DEFAULT 'UTC'"),
     ("accounts", "is_demo", "BOOLEAN DEFAULT 0"),
     ("instruments", "chart_symbol", "VARCHAR(32)"),
+    ("instruments", "data_source", "VARCHAR(16)"),
     ("trades", "take_profit", "FLOAT"),
 ]
 

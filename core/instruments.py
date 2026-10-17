@@ -51,7 +51,8 @@ class InstrumentSpec:
     multiplier: float = 1.0
     quote_currency: str = "USD"
     name: str = ""
-    chart_symbol: str = ""  # market-data ticker; empty = default_chart_symbol()
+    chart_symbol: str = ""  # market-data ticker; empty = the source's default
+    data_source: str = ""  # "", "auto", "yahoo", "oanda", "twelvedata" or "binance"
 
 
 _F, _C, _X, _K, _S = (

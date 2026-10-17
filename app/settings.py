@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from zoneinfo import available_timezones
 
 import pandas as pd
@@ -9,6 +10,13 @@ import streamlit as st
 from sqlalchemy import func, select
 
 from app.common import db
+from core.data_sources import (
+    SETTING_ENV,
+    SOURCE_LABELS,
+    credentials,
+    set_setting,
+    settings_from_db,
+)
 from core.importer import recalculate_trades, replace_instruments
 from core.instruments import ACCOUNT_CURRENCY, AssetClass, InstrumentSpec
 from core.models import Account, BrokerPreset, Instrument, Tag, TagCategory, Trade, trade_tags
@@ -87,6 +95,60 @@ with st.form("new_account", clear_on_submit=True):
                 s.add(Account(name=name.strip(), timezone=new_account_tz))
                 st.rerun()
 
+# ------------------------------------------------------------------ market data
+st.header("Market data")
+st.caption(
+    "Candles for the trade review chart. With nothing set up, crypto comes from Binance "
+    "and everything else from Yahoo Finance (gold as the futures contract, intraday "
+    "history limited to 30–60 days). Add a free OANDA token or Twelve Data key for spot "
+    "forex and gold with years of 1-minute history. Keys are stored in your local "
+    "database. TradingView has no data API: export candles from a TradingView chart and "
+    "upload them on the trade page instead."
+)
+with db() as s:
+    creds = credentials(s)
+    stored = settings_from_db(s)
+env_set = {k for k, env in SETTING_ENV.items() if os.environ.get(env)}
+with st.form("market_data"):
+    c1, c2 = st.columns([3, 1])
+    oanda_token = c1.text_input(
+        "OANDA API token",
+        value=stored.get("oanda_token", ""),
+        type="password",
+        help="Forex, spot XAUUSD/XAGUSD and oil CFDs (bid prices). Free: open an OANDA "
+        "practice (demo) account, then Manage API Access → Generate. "
+        "Or set the OANDA_API_TOKEN environment variable.",
+    )
+    oanda_env = c2.selectbox(
+        "OANDA account",
+        ["practice", "live"],
+        index=1 if creds["oanda_environment"] == "live" else 0,
+    )
+    td_key = st.text_input(
+        "Twelve Data API key",
+        value=stored.get("twelvedata_api_key", ""),
+        type="password",
+        help="Forex, spot gold, crypto and US stocks. Free key (800 requests a day) at "
+        "twelvedata.com. Or set the TWELVEDATA_API_KEY environment variable.",
+    )
+    if env_set:
+        names = ", ".join(SETTING_ENV[k] for k in sorted(env_set))
+        st.caption(f"Set by environment variable (overrides the fields): {names}")
+    if st.form_submit_button("Save market data settings"):
+        with db() as s:
+            set_setting(s, "oanda_token", oanda_token)
+            set_setting(s, "oanda_environment", oanda_env)
+            set_setting(s, "twelvedata_api_key", td_key)
+        st.success("Saved.")
+        st.rerun()
+active = []
+if creds["oanda_token"]:
+    active.append("OANDA for forex and spot metals")
+elif creds["twelvedata_api_key"]:
+    active.append("Twelve Data for forex and spot metals")
+active += ["Binance for crypto", "Yahoo Finance for stocks and futures"]
+st.caption("Auto uses: " + "; ".join(active) + ".")
+
 # ------------------------------------------------------------------ instruments
 st.header("Instruments")
 st.caption(
@@ -107,13 +169,22 @@ with db() as s:
                 "asset_class": i.asset_class.value,
                 "multiplier": i.multiplier,
                 "quote_currency": i.quote_currency,
+                "data_source": i.data_source or "auto",
                 "chart_symbol": i.chart_symbol or "",
             }
             for i in s.scalars(
                 select(Instrument).order_by(Instrument.asset_class, Instrument.symbol)
             )
         ],
-        columns=["symbol", "name", "asset_class", "multiplier", "quote_currency", "chart_symbol"],
+        columns=[
+            "symbol",
+            "name",
+            "asset_class",
+            "multiplier",
+            "quote_currency",
+            "data_source",
+            "chart_symbol",
+        ],
     )
 edited = st.data_editor(
     instruments,
@@ -130,10 +201,17 @@ edited = st.data_editor(
             "Multiplier", min_value=0.0, format="%g", required=True
         ),
         "quote_currency": st.column_config.TextColumn("Quote ccy", max_chars=4),
+        "data_source": st.column_config.SelectboxColumn(
+            "Chart source",
+            options=list(SOURCE_LABELS),
+            help="Where review-chart candles come from. Auto: crypto → Binance; forex and "
+            "spot metals → OANDA or Twelve Data when set up; the rest → Yahoo Finance.",
+        ),
         "chart_symbol": st.column_config.TextColumn(
             "Chart ticker",
-            help="Yahoo Finance ticker for the review chart. Leave empty for the default: "
-            "futures ES=F, forex EURUSD=X, crypto BTC-USD, gold GC=F, stocks their symbol.",
+            help="Ticker in the source's format; leave empty for the default. Examples: "
+            "OANDA XAU_USD, EUR_USD · Twelve Data XAU/USD, EUR/USD · Binance BTCUSDT · "
+            "Yahoo ES=F, EURUSD=X, TSLA.",
         ),
     },
     key="instrument_editor",
@@ -146,6 +224,7 @@ if st.button("💾 Save instruments and recalculate P&L"):
             multiplier=float(r.multiplier),
             quote_currency=_text(r.quote_currency) or "USD",
             chart_symbol=_text(r.chart_symbol),
+            data_source=_text(r.data_source),
             name=_text(r.name),
         )
         for r in edited.dropna(subset=["symbol", "asset_class", "multiplier"]).itertuples()

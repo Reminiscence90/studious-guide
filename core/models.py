@@ -100,8 +100,9 @@ class Instrument(Base):
     # USD (or quote currency) value of a 1.0 price move for one unit of quantity.
     multiplier: Mapped[float] = mapped_column(Float, default=1.0)
     quote_currency: Mapped[str] = mapped_column(String(4), default="USD")
-    # Ticker used to download candles for the review chart (Yahoo Finance format,
-    # e.g. "ES=F", "EURUSD=X", "BTC-USD"); empty means the default for the market.
+    # Where review-chart candles come from ("auto", "yahoo", "oanda", "twelvedata",
+    # "binance") and the ticker in that source's format; empty ticker = the default.
+    data_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     chart_symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
@@ -224,6 +225,15 @@ class PriceBar(Base):
     volume: Mapped[float | None] = mapped_column(Float, nullable=True)
     # "yahoo", "csv" (uploaded) or "demo" (synthetic sample data)
     source: Mapped[str] = mapped_column(String(16), default="yahoo")
+
+
+class AppSetting(Base):
+    """Key/value settings such as market-data API keys (stored in the local database)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
 
 
 class Tag(Base):

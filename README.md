@@ -89,13 +89,26 @@ Where the candles come from:
    interval they can build, so one 1-minute export covers 5m, 1h and so on. Use this to
    see your broker's exact prices: for `XAUUSD.R`, the free data source only has the
    gold futures price, which trades a few dollars away from spot.
-2. **Yahoo Finance** (automatic, no API key). Tickers default to the stock symbol,
-   `ES=F` for futures, `EURUSD=X` for forex, `BTC-USD` for crypto and `GC=F` / `CL=F`
-   for spot gold and oil. Change them in Settings → Instruments (*Chart ticker*). Yahoo
-   keeps 1-minute candles for about 30 days, 5–30 minute candles for 60 days and hourly
-   candles for 2 years, so older trades get coarser candles unless you upload your own.
-   Downloaded candles are cached in the database, so a trade you have reviewed once
-   works offline. Use *Download again* to refresh them.
+2. **Online sources**, chosen per instrument (Settings → Instruments → *Chart source*,
+   default *Auto*). Add keys under Settings → Market data.
+
+   | Source | Markets | Access | Default ticker |
+   |---|---|---|---|
+   | OANDA (v20 API, bid prices) | forex, spot XAUUSD/XAGUSD, oil CFDs | free token from an OANDA practice account | `XAU_USD`, `EUR_USD` |
+   | Twelve Data | forex, spot gold, crypto, US stocks | free API key (800 requests a day) | `XAU/USD`, `EUR/USD` |
+   | Binance (public market data) | crypto | no key | `BTCUSDT` |
+   | Yahoo Finance | US stocks, futures; fallback for the rest | no key | `TSLA`, `ES=F`, `EURUSD=X`, `GC=F` |
+
+   *Auto* picks Binance for crypto, then OANDA or Twelve Data (when a key is set) for
+   forex and spot metals, and Yahoo Finance for everything else. Yahoo keeps 1-minute
+   candles for about 30 days and 5–30 minute candles for 60 days, so older trades get
+   coarser candles there. The other sources have years of 1-minute history. Downloaded
+   candles are cached in the database, so a trade you have reviewed once works
+   offline. Use *Download again* to refresh them.
+
+   HTTPS certificates are checked against your operating system's certificate store
+   (via `truststore`), which fixes `CERTIFICATE_VERIFY_FAILED` errors on Python builds
+   without their own certificates or behind antivirus that inspects HTTPS.
 3. **Demo candles.** The sample data's account is marked as a demo account. Its charts
    use synthetic candles that pass through each sample fill. They are clearly labelled
    and never used for real accounts.
@@ -332,6 +345,8 @@ core/
   trades.py          tags, screenshots, playbook links, deletion
   journal.py         journal entries and playbook definitions
   market_data.py     candles: Yahoo Finance download, CSV upload, cache, resampling
+  data_sources.py    OANDA / Twelve Data / Binance sources, API keys, Auto choice
+  http.py            HTTPS requests using the OS certificate store
   review.py          MFE / MAE, planned R:R and the review chart payload
   demo_market.py     synthetic candles for the demo account
   seed.py            `trade-journal-seed` command
@@ -346,9 +361,12 @@ docs/screenshots/    images used in this README
 |---|---|---|
 | `TRADE_JOURNAL_DB_URL` | `sqlite:///data/journal.db` | Any SQLAlchemy URL |
 | `TRADE_JOURNAL_DATA_DIR` | `data/` | Where the SQLite file and uploaded screenshots are stored |
+| `OANDA_API_TOKEN` / `OANDA_ENVIRONMENT` | – / `practice` | OANDA candles (overrides Settings) |
+| `TWELVEDATA_API_KEY` | – | Twelve Data candles (overrides Settings) |
 
-The review chart downloads candles from `query2.finance.yahoo.com`. Without internet
-access, uploaded and previously downloaded candles still work.
+The review chart downloads candles from api-fxpractice.oanda.com (or api-fxtrade),
+api.twelvedata.com, data-api.binance.vision and query2.finance.yahoo.com. Without
+internet access, uploaded and previously downloaded candles still work.
 
 The models only use portable column types. To move to Postgres, add a driver
 (`uv add "psycopg[binary]"`) and set
