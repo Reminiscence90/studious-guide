@@ -51,6 +51,7 @@ class InstrumentSpec:
     multiplier: float = 1.0
     quote_currency: str = "USD"
     name: str = ""
+    chart_symbol: str = ""  # market-data ticker; empty = default_chart_symbol()
 
 
 _F, _C, _X, _K, _S = (
@@ -203,3 +204,38 @@ def point_value(spec: InstrumentSpec, price: float) -> float:
 
 def default_specs() -> dict[str, InstrumentSpec]:
     return {s.symbol: s for s in DEFAULT_INSTRUMENTS}
+
+
+# Spot / CFD symbols charted with the matching futures contract (Yahoo has no spot feed).
+_SPOT_PROXIES = {
+    "XAUUSD": "GC=F",
+    "XAGUSD": "SI=F",
+    "XPTUSD": "PL=F",
+    "USOIL": "CL=F",
+    "UKOIL": "BZ=F",
+}
+
+
+def default_chart_symbol(spec: InstrumentSpec) -> str:
+    """Market-data ticker (Yahoo Finance format) for the review chart.
+
+    Stocks use their symbol, futures the continuous front month (``ES=F``), forex the
+    ``=X`` pair, crypto ``BTC-USD``. Spot metals and oil CFDs use the matching futures
+    contract, which trades a few dollars away from spot; upload your broker's own
+    candles for exact prices.
+    """
+    if spec.chart_symbol:
+        return spec.chart_symbol
+    sym = spec.symbol
+    if sym in _SPOT_PROXIES:
+        return _SPOT_PROXIES[sym]
+    match spec.asset_class:
+        case AssetClass.FUTURE | AssetClass.COMMODITY:
+            return f"{sym}=F"
+        case AssetClass.FOREX:
+            return f"{sym}=X"
+        case AssetClass.CRYPTO:
+            base = next((sym.removesuffix(q) for q in STABLE_QUOTES if sym.endswith(q)), sym)
+            return f"{base}-USD"
+        case _:
+            return sym

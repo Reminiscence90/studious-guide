@@ -88,6 +88,7 @@ def test_entry_and_stop_loss_at_same_timestamp(session: Session, imported: Impor
     assert trade.gross_pnl == pytest.approx(-510.00)
     assert trade.net_pnl == pytest.approx(-511.50)
     assert trade.stop_loss == 4360  # from the filled stop-loss order
+    assert trade.take_profit == pytest.approx(4329.3)  # cancelled TP 3001, by order ID
     assert {e.raw_symbol for e in trade.executions} == {"XAUUSD.R"}
 
 
@@ -96,6 +97,7 @@ def test_stop_from_cancelled_bracket_and_broker_net_pnl(
 ) -> None:
     trade = _trade(session, "XAUUSD.R:4000")
     assert trade.stop_loss == 4290  # cancelled SL order 4002, linked by order ID
+    assert trade.take_profit == 4320  # filled TP order's limit price
     assert trade.gross_pnl == pytest.approx(400.00)
     assert trade.fees == pytest.approx(0.60)
     assert trade.net_pnl == pytest.approx(401.00)  # broker net includes +1.60 swap

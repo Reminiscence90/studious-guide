@@ -92,6 +92,10 @@ _LATE_COLUMNS = [
     ("executions", "position_id", "VARCHAR(64)"),
     ("executions", "realized_pnl", "FLOAT"),
     ("executions", "realized_net_pnl", "FLOAT"),
+    ("accounts", "timezone", "VARCHAR(64) DEFAULT 'UTC'"),
+    ("accounts", "is_demo", "BOOLEAN DEFAULT 0"),
+    ("instruments", "chart_symbol", "VARCHAR(32)"),
+    ("trades", "take_profit", "FLOAT"),
 ]
 
 

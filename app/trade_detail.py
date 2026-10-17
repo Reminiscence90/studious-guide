@@ -17,6 +17,7 @@ from app.common import (
     load_filtered_trades,
     pnl_color,
 )
+from app.trade_review import render_trade_review
 from core import metrics as m
 from core.db import SCREENSHOT_DIR
 from core.instruments import ACCOUNT_CURRENCY, AssetClass
@@ -143,6 +144,8 @@ c[3].metric(
                                      if abs(other) >= 0.005 else ""),
 )  # fmt: skip
 
+render_trade_review(trade_id)
+
 left, right = st.columns([3, 2], gap="large")
 
 # ------------------------------------------------------------------ notes
@@ -232,13 +235,18 @@ with right:
     with st.form(f"risk_{trade_id}"):
         stop = st.number_input(
             "Stop loss (0 = none)", min_value=0.0, value=float(trade.stop_loss or 0.0),
-            format="%.4f",
+            format="%.5f",
         )  # fmt: skip
-        if st.form_submit_button("Save stop loss"):
+        target = st.number_input(
+            "Take profit (0 = none)", min_value=0.0, value=float(trade.take_profit or 0.0),
+            format="%.5f",
+        )  # fmt: skip
+        if st.form_submit_button("Save stop and target"):
             with db() as s:
                 obj = s.get(Trade, trade_id)
                 assert obj is not None
                 obj.stop_loss = stop or None
+                obj.take_profit = target or None
             st.rerun()
     if trade.stop_loss:
         risk = abs(trade.avg_entry_price - trade.stop_loss) * trade.quantity * trade.point_value

@@ -159,6 +159,9 @@ def seed(engine: Engine | None = None, *, reset: bool = False, rng_seed: int = 7
         account = session.scalars(select(Account).order_by(Account.id)).first()
         assert account is not None
         account.name = "Demo (USD)"
+        # Sample times are US Eastern; demo accounts chart synthetic candles.
+        account.timezone = "America/New_York"
+        account.is_demo = True
 
         df = pd.read_csv(SAMPLE_CSV, dtype=str, keep_default_na=False)
         mapping = guess_mapping(df.columns)
@@ -213,6 +216,9 @@ def _seed_trade(
         sign = -1 if trade.side is TradeSide.LONG else 1
         decimals = 5 if trade.avg_entry_price < 10 else 3 if trade.avg_entry_price < 200 else 2
         trade.stop_loss = round(trade.avg_entry_price * (1 + sign * risk), decimals)
+        if rng.random() < 0.8:  # most planned trades also have a profit target
+            reward = risk * rng.choice([1.5, 2.0, 2.0, 2.5, 3.0])
+            trade.take_profit = round(trade.avg_entry_price * (1 - sign * reward), decimals)
 
     # One setup per trade; the ICT model has the best edge in the demo data.
     setup_names = list(playbooks)

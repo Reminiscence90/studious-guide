@@ -70,6 +70,11 @@ class Account(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
+    # IANA time zone of the broker's timestamps (e.g. "Asia/Kuala_Lumpur"), used to line
+    # trades up with market data on the review chart.
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # Sample-data account: its review charts use synthetic candles (core.demo_market).
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     trades: Mapped[list[Trade]] = relationship(
@@ -95,6 +100,9 @@ class Instrument(Base):
     # USD (or quote currency) value of a 1.0 price move for one unit of quantity.
     multiplier: Mapped[float] = mapped_column(Float, default=1.0)
     quote_currency: Mapped[str] = mapped_column(String(4), default="USD")
+    # Ticker used to download candles for the review chart (Yahoo Finance format,
+    # e.g. "ES=F", "EURUSD=X", "BTC-USD"); empty means the default for the market.
+    chart_symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class BrokerPreset(Base):
@@ -136,6 +144,7 @@ class Trade(Base):
     gross_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     stop_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     playbook_id: Mapped[int | None] = mapped_column(
         ForeignKey("playbooks.id", ondelete="SET NULL"), nullable=True
@@ -196,6 +205,25 @@ class Execution(Base):
 
     account: Mapped[Account] = relationship(back_populates="executions")
     trade: Mapped[Trade | None] = relationship(back_populates="executions")
+
+
+class PriceBar(Base):
+    """Cached OHLC candle for the trade review chart. ``time`` is the bar open in UTC."""
+
+    __tablename__ = "price_bars"
+    __table_args__ = (UniqueConstraint("chart_symbol", "interval", "time"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chart_symbol: Mapped[str] = mapped_column(String(32), index=True)
+    interval: Mapped[str] = mapped_column(String(8))
+    time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "yahoo", "csv" (uploaded) or "demo" (synthetic sample data)
+    source: Mapped[str] = mapped_column(String(16), default="yahoo")
 
 
 class Tag(Base):

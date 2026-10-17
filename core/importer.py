@@ -59,6 +59,7 @@ ORDER_HISTORY_FIELDS: tuple[str, ...] = (
     "status",
     "order_type",
     "stop_price",
+    "limit_price",
     "position_id",
     "order_id",
     "closed_pnl",
@@ -79,6 +80,7 @@ FIELD_LABELS: dict[str, str] = {
     "status": "Order status",
     "order_type": "Order type",
     "stop_price": "Stop price",
+    "limit_price": "Limit price",
     "position_id": "Position ID",
     "order_id": "Order ID",
     "closed_pnl": "Closed P&L",
@@ -89,6 +91,8 @@ FIELD_HELP: dict[str, str] = {
     "status": "Only rows with a filled status (Filled, Partially filled, Executed…) are "
     "imported; cancelled, rejected and pending orders are skipped.",
     "order_type": "Stop loss / take profit orders are treated as closing fills.",
+    "limit_price": "The limit price of the position's Take Profit order becomes the trade's "
+    "profit target, shown on the review chart and used for the planned R:R.",
     "stop_price": "The stop price of the position's Stop Loss order becomes the trade's "
     "stop loss, so R-multiples are filled in.",
     "position_id": "Fills with the same position ID form one trade (works for hedging "
@@ -149,6 +153,7 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "status": ("status", "orderstatus", "state"),
     "order_type": ("ordertype", "type"),
     "stop_price": ("stopprice", "stoplossprice", "stoploss", "sl"),
+    "limit_price": ("limitprice", "takeprofitprice", "takeprofit", "tp"),
     "position_id": ("positionid", "positionticket", "positionno", "positionnumber"),
     "order_id": ("orderid", "orderno", "ordernumber", "ticket", "dealid", "tradeid"),
     "net_closed_pnl": ("netclosedpl", "netclosedpnl", "netrealizedpl", "netrealisedpl"),
@@ -178,7 +183,8 @@ FILLED_STATUSES = {
     "matched",
 }
 STOP_LOSS_ORDER_TYPES = {"stoploss", "sl"}
-EXIT_ORDER_TYPES = STOP_LOSS_ORDER_TYPES | {"takeprofit", "tp"}
+TAKE_PROFIT_ORDER_TYPES = {"takeprofit", "tp"}
+EXIT_ORDER_TYPES = STOP_LOSS_ORDER_TYPES | TAKE_PROFIT_ORDER_TYPES
 
 # Built-in broker presets: name -> (mapping, datetime format).
 BUILTIN_PRESETS: dict[str, tuple[dict[str, str], str | None]] = {
@@ -193,6 +199,7 @@ BUILTIN_PRESETS: dict[str, tuple[dict[str, str], str | None]] = {
             "status": "Status",
             "order_type": "Type",
             "stop_price": "Stop Price",
+            "limit_price": "Limit Price",
             "position_id": "Position ID",
             "order_id": "Order ID",
             "closed_pnl": "Closed P&L",
@@ -230,6 +237,7 @@ class Fill:
     realized_pnl: float | None = None  # broker's realised P&L on a closing fill, USD
     realized_net_pnl: float | None = None  # same after commission, incl. swap
     stop_loss: float | None = None  # stop of the position's stop-loss order
+    take_profit: float | None = None  # limit of the position's take-profit order
 
     @property
     def signed_quantity(self) -> float:
@@ -445,8 +453,10 @@ def rows_to_executions(
 
     parsed = ParsedRows()
     fmt = datetime_format or None
-    # (raw symbol, order id, position id, stop price) of stop-loss orders, any status.
+    # (raw symbol, order id, position id, price) of stop-loss / take-profit orders,
+    # whatever their status.
     stops: list[tuple[str, str, str, float]] = []
+    targets: list[tuple[str, str, str, float]] = []
 
     def col(row: pd.Series, fld: str) -> Any:
         name = mapping.get(fld)
@@ -464,6 +474,10 @@ def rows_to_executions(
                 stop_price = _parse_number(col(row, "stop_price"))
                 if stop_price:
                     stops.append((symbol, order_id, position_id, stop_price))
+            elif order_type in TAKE_PROFIT_ORDER_TYPES:
+                limit_price = _parse_number(col(row, "limit_price"))
+                if limit_price:
+                    targets.append((symbol, order_id, position_id, limit_price))
 
             status = _norm_word(col(row, "status"))
             if mapping.get("status") and status and status not in FILLED_STATUSES:
@@ -531,30 +545,34 @@ def rows_to_executions(
             parsed.errors.append(f"Row {line}: {exc}")
 
     if stops:
-        parsed.fills = _attach_stop_losses(parsed.fills, stops)
+        parsed.fills = _attach_bracket(parsed.fills, stops, "stop_loss")
+    if targets:
+        parsed.fills = _attach_bracket(parsed.fills, targets, "take_profit")
     return parsed
 
 
-def _attach_stop_losses(fills: list[Fill], stops: list[tuple[str, str, str, float]]) -> list[Fill]:
-    """Give opening fills the stop price of their position's stop-loss order.
+def _attach_bracket(
+    fills: list[Fill], orders: list[tuple[str, str, str, float]], attr: str
+) -> list[Fill]:
+    """Give opening fills the price of their position's stop-loss / take-profit order.
 
-    A stop-loss order belongs to a position when it has the same position ID, or, for
+    A bracket order belongs to a position when it has the same position ID, or, for
     bracket orders that were cancelled (and so carry no position ID), when its order
     ID is 1–3 above the opening order's ID on the same symbol.
     """
-    by_position = {(sym, pid): price for sym, _, pid, price in stops if pid}
-    by_order = {(sym, oid): price for sym, oid, _, price in stops if oid.isdigit()}
+    by_position = {(sym, pid): price for sym, _, pid, price in orders if pid}
+    by_order = {(sym, oid): price for sym, oid, _, price in orders if oid.isdigit()}
     out = []
     for f in fills:
-        stop = None
+        price = None
         if not f.is_exit:
-            stop = by_position.get((f.symbol, f.position_id)) if f.position_id else None
-            if stop is None and f.order_id.isdigit():
+            price = by_position.get((f.symbol, f.position_id)) if f.position_id else None
+            if price is None and f.order_id.isdigit():
                 for offset in (1, 2, 3):
-                    stop = by_order.get((f.symbol, str(int(f.order_id) + offset)))
-                    if stop is not None:
+                    price = by_order.get((f.symbol, str(int(f.order_id) + offset)))
+                    if price is not None:
                         break
-        out.append(replace(f, stop_loss=stop) if stop is not None else f)
+        out.append(replace(f, **{attr: price}) if price is not None else f)
     return out
 
 
@@ -720,7 +738,12 @@ def load_specs(session: Session) -> dict[str, InstrumentSpec]:
     """Instrument specs from the database (the built-in catalog if the table is empty)."""
     specs = {
         row.symbol: InstrumentSpec(
-            row.symbol, row.asset_class, row.multiplier, row.quote_currency, row.name
+            row.symbol,
+            row.asset_class,
+            row.multiplier,
+            row.quote_currency,
+            row.name,
+            row.chart_symbol or "",
         )
         for row in session.scalars(select(Instrument))
     }
@@ -749,6 +772,7 @@ def replace_instruments(session: Session, specs: Sequence[InstrumentSpec]) -> No
             asset_class=s.asset_class,
             multiplier=s.multiplier,
             quote_currency=s.quote_currency,
+            chart_symbol=s.chart_symbol.strip() or None,
         )
         for s in cleaned.values()
     )
@@ -866,6 +890,8 @@ def import_fills(
             _apply_summary(trade, summary)
             if trade.stop_loss is None:
                 trade.stop_loss = initial_stop(summary, group.fills)
+            if trade.take_profit is None:
+                trade.take_profit = initial_target(summary, group.fills)
             session.flush()
             result.trade_ids.append(trade.id)
             for f in group.fills:
@@ -906,6 +932,16 @@ def initial_stop(summary: TradeSummary, fills: Sequence[Fill]) -> float | None:
     entry = summary.avg_entry_price
     on_risk_side = stop < entry if summary.side is TradeSide.LONG else stop > entry
     return stop if on_risk_side else None
+
+
+def initial_target(summary: TradeSummary, fills: Sequence[Fill]) -> float | None:
+    """Profit target from the position's take-profit order (must be beyond the entry)."""
+    target = next((f.take_profit for f in fills if f.take_profit is not None), None)
+    if target is None:
+        return None
+    entry = summary.avg_entry_price
+    beyond = target > entry if summary.side is TradeSide.LONG else target < entry
+    return target if beyond else None
 
 
 def _open_trade_for(

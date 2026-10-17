@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from zoneinfo import available_timezones
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
@@ -13,9 +15,32 @@ from core.models import Account, BrokerPreset, Instrument, Tag, TagCategory, Tra
 
 st.title("Settings")
 
+
+def _text(value: object) -> str:
+    """Cell text from the data editor; empty cells come back as None or NaN."""
+    return "" if value is None or pd.isna(value) else str(value).strip()
+
+
+COMMON_ZONES = [
+    "UTC",
+    "Asia/Kuala_Lumpur",
+    "Asia/Singapore",
+    "Asia/Hong_Kong",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+    "Europe/London",
+    "Europe/Athens",
+    "America/New_York",
+    "America/Chicago",
+]
+ZONES = COMMON_ZONES + sorted(z for z in available_timezones() if z not in COMMON_ZONES)
+
 # ------------------------------------------------------------------ accounts
 st.header("Accounts")
-st.caption(f"All accounts are in {ACCOUNT_CURRENCY}.")
+st.caption(
+    f"All accounts are in {ACCOUNT_CURRENCY}. The time zone is the one your broker's "
+    "timestamps are in; it lines trades up with the candles on the review chart."
+)
 with db() as s:
     rows = s.execute(
         select(Account, func.count(Trade.id))
@@ -23,17 +48,23 @@ with db() as s:
         .group_by(Account.id)
         .order_by(Account.id)
     ).all()
-    account_rows = [(a.id, a.name, n) for a, n in rows]
+    account_rows = [(a.id, a.name, a.timezone or "UTC", n) for a, n in rows]
 
-for acc_id, name, n_trades in account_rows:
-    with st.expander(f"{name} · {n_trades} trades"):
+for acc_id, name, tz, n_trades in account_rows:
+    with st.expander(f"{name} · {tz} · {n_trades} trades"):
         with st.form(f"acc_{acc_id}"):
             new_name = st.text_input("Name", value=name)
+            new_tz = st.selectbox(
+                "Time zone of the broker's timestamps",
+                ZONES,
+                index=ZONES.index(tz) if tz in ZONES else 0,
+            )
             if st.form_submit_button("Save"):
                 with db() as s:
                     acc = s.get(Account, acc_id)
                     assert acc is not None
                     acc.name = new_name.strip() or name
+                    acc.timezone = new_tz
                 st.rerun()
         if len(account_rows) > 1 and st.button(
             "Delete account and its trades", key=f"del_acc_{acc_id}"
@@ -47,12 +78,13 @@ for acc_id, name, n_trades in account_rows:
 with st.form("new_account", clear_on_submit=True):
     st.subheader("Add account")
     name = st.text_input("Name")
+    new_account_tz = st.selectbox("Time zone of the broker's timestamps", ZONES)
     if st.form_submit_button("Add account") and name.strip():
         with db() as s:
             if s.scalars(select(Account).where(Account.name == name.strip())).first():
                 st.error("An account with that name already exists.")
             else:
-                s.add(Account(name=name.strip()))
+                s.add(Account(name=name.strip(), timezone=new_account_tz))
                 st.rerun()
 
 # ------------------------------------------------------------------ instruments
@@ -75,12 +107,13 @@ with db() as s:
                 "asset_class": i.asset_class.value,
                 "multiplier": i.multiplier,
                 "quote_currency": i.quote_currency,
+                "chart_symbol": i.chart_symbol or "",
             }
             for i in s.scalars(
                 select(Instrument).order_by(Instrument.asset_class, Instrument.symbol)
             )
         ],
-        columns=["symbol", "name", "asset_class", "multiplier", "quote_currency"],
+        columns=["symbol", "name", "asset_class", "multiplier", "quote_currency", "chart_symbol"],
     )
 edited = st.data_editor(
     instruments,
@@ -97,6 +130,11 @@ edited = st.data_editor(
             "Multiplier", min_value=0.0, format="%g", required=True
         ),
         "quote_currency": st.column_config.TextColumn("Quote ccy", max_chars=4),
+        "chart_symbol": st.column_config.TextColumn(
+            "Chart ticker",
+            help="Yahoo Finance ticker for the review chart. Leave empty for the default: "
+            "futures ES=F, forex EURUSD=X, crypto BTC-USD, gold GC=F, stocks their symbol.",
+        ),
     },
     key="instrument_editor",
 )
@@ -106,8 +144,9 @@ if st.button("💾 Save instruments and recalculate P&L"):
             symbol=str(r.symbol),
             asset_class=AssetClass(r.asset_class),
             multiplier=float(r.multiplier),
-            quote_currency=str(r.quote_currency or "USD"),
-            name=str(r.name or ""),
+            quote_currency=_text(r.quote_currency) or "USD",
+            chart_symbol=_text(r.chart_symbol),
+            name=_text(r.name),
         )
         for r in edited.dropna(subset=["symbol", "asset_class", "multiplier"]).itertuples()
     ]
