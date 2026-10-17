@@ -9,8 +9,6 @@ dependencies = [
     "plotly>=5.22",
     "sqlalchemy>=2.0",
     "pandas>=2.2",
-    "truststore>=0.10.5",
-    "certifi>=2026.7.22",
 ]
 
 [project.scripts]

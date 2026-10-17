@@ -16,7 +16,6 @@ a daily journal, run your playbooks and see where your edge is.
 | **Calendar** | Monthly calendar with per-day net P&L, trade count and journal mood, colored green/red, with weekly totals. Click a day to see its trades and journal entry |
 | **Trade log** | Sortable, filterable table (symbol, side, status, result, tags, playbook) with CSV export. Select a row to open the trade |
 | **Trade detail** | Entry/exit, P&L, fees, R-multiple (once a stop loss is set), holding time, markdown notes, screenshot uploads (stored locally), tags, playbook checklist, executions |
-| **Chart review** | A [TradingView Lightweight Charts™](https://www.tradingview.com/lightweight-charts/) candlestick chart on every trade: fill markers, entry/exit/stop/target lines, interval picker, plus MFE / MAE (in $ and R), move captured and planned R:R ([details](#trade-review-chart)) |
 | **Tags** | Three setups (**Golden Ratio - 0.618 retracement**, **Supply/Demand zone**, **ICT - Liquidity Sweep + BOS + Imbalance**), plus Mistakes and Emotions. Custom tags can be added; several tags per trade |
 | **Daily journal** | One entry per trading day: pre-market plan, post-market review, mood (1–5) and notes |
 | **Playbooks** | One playbook per setup, each with a description, entry/exit rules and a checklist (see [Setups and playbooks](#setups-and-playbooks)). Link trades, tick the criteria that were met, and see per-playbook stats and checklist adherence |
@@ -52,73 +51,6 @@ journal, skip the seed step; the app creates a default `Main` account (USD).
 | ![Reports by market](docs/screenshots/reports_markets.png) **Reports: by market** | ![Reports by tag](docs/screenshots/reports_tags.png) **Reports: setups, mistakes, emotions** |
 | ![Playbooks](docs/screenshots/playbooks.png) **Playbooks** | ![Instruments](docs/screenshots/instruments.png) **Settings: instruments and multipliers** |
 | ![Import](docs/screenshots/import_mapping.png) **CSV column mapping** | ![Journal](docs/screenshots/journal.png) **Daily journal** |
-
-## Trade review chart
-
-Every trade page opens with a candlestick chart of the trade, drawn with TradingView
-Lightweight Charts™.
-
-![Trade review chart](docs/screenshots/trade_review.png)
-
-* **On the chart.** An arrow marks each fill, labelled entry or exit with its side,
-  size and price. Lines mark the average entry, the average exit, the stop loss and
-  the take-profit target, and the price axis always includes all four. Hover a
-  candle to see its open, high, low and close.
-* **Interval.** *Auto* picks the finest interval (1m, 5m, 15m, 30m, 1h, 4h or 1d) that
-  fits the whole trade in about 240 candles and that has data for a trade of that age.
-  You can also choose an interval yourself.
-* **Review numbers.**
-  * **MFE / MAE**: the most the trade moved in your favour and against you while it was
-    open, in $ and in R. Candles only show highs and lows, so the entry and exit
-    candles count in full.
-  * **Move captured**: the exit's gain divided by MFE, shown for winning trades.
-  * **Planned R:R**: (target − entry) ÷ (entry − stop).
-* **Stop and target.** Order-history imports fill these in from the bracket orders, and
-  you can edit both under *Risk* on the trade page.
-* **Time zone.** Set each account's time zone (Settings → Accounts) to the one your
-  broker's timestamps use, so the fills line up with the candles. The chart's time
-  axis is shown in that time zone.
-
-Where the candles come from:
-
-1. **Your own candles (recommended for CFDs).** Under *Use your own candles (CSV)* on
-   the trade page, upload an OHLC export with columns time, open, high, low, close and
-   optionally volume. TradingView's *Export chart data* and MT5 exports both work. Unix
-   timestamps are read as UTC; text times are read in the time zone you choose. The
-   candles are stored per instrument (for example XAUUSD) and are used at every
-   interval they can build, so one 1-minute export covers 5m, 1h and so on. Use this to
-   see your broker's exact prices: for `XAUUSD.R`, the free data source only has the
-   gold futures price, which trades a few dollars away from spot.
-2. **Online sources**, chosen per instrument (Settings → Instruments → *Chart source*,
-   default *Auto*). Add keys under Settings → Market data.
-
-   | Source | Markets | Access | Default ticker |
-   |---|---|---|---|
-   | OANDA (v20 API, bid prices) | forex, spot XAUUSD/XAGUSD, oil CFDs | free token from an OANDA practice account | `XAU_USD`, `EUR_USD` |
-   | Twelve Data | forex, spot gold, crypto, US stocks | free API key (800 requests a day) | `XAU/USD`, `EUR/USD` |
-   | Binance (public market data) | crypto | no key | `BTCUSDT` |
-   | Yahoo Finance | US stocks, futures; fallback for the rest | no key | `TSLA`, `ES=F`, `EURUSD=X`, `GC=F` |
-
-   *Auto* picks Binance for crypto, then OANDA or Twelve Data (when a key is set) for
-   forex and spot metals, and Yahoo Finance for everything else. Yahoo keeps 1-minute
-   candles for about 30 days and 5–30 minute candles for 60 days, so older trades get
-   coarser candles there. The other sources have years of 1-minute history. Downloaded
-   candles are cached in the database, so a trade you have reviewed once works
-   offline. Use *Download again* to refresh them.
-
-   HTTPS certificates are checked against your operating system's certificate store
-   (via `truststore`), which fixes `CERTIFICATE_VERIFY_FAILED` errors on Python builds
-   without their own certificates or behind antivirus that inspects HTTPS.
-3. **Demo candles.** The sample data's account is marked as a demo account. Its charts
-   use synthetic candles that pass through each sample fill. They are clearly labelled
-   and never used for real accounts.
-
-The Lightweight Charts™ library (v5.2.1, Apache-2.0) is bundled in `app/static/`, so the
-chart needs no CDN. It keeps TradingView's attribution link on the chart, as its license
-asks.
-
-> TradingView Lightweight Charts™ — Copyright (c) 2026 TradingView, Inc.
-> https://www.tradingview.com/
 
 ## CSV format
 
@@ -333,8 +265,6 @@ app/                 Streamlit UI, one file per page
   journal.py  playbooks.py  import_trades.py  settings.py
   common.py          shared helpers (DB session, filters, formatting)
   charts.py          Plotly figure builders
-  trade_review.py    chart review section of the trade page
-  lwc_chart.py       Lightweight Charts™ component (library vendored in static/)
 core/
   models.py          SQLAlchemy 2.0 ORM models
   db.py              engine, sessions, init_db
@@ -344,11 +274,6 @@ core/
   repository.py      loads trades from the DB into DataFrames
   trades.py          tags, screenshots, playbook links, deletion
   journal.py         journal entries and playbook definitions
-  market_data.py     candles: Yahoo Finance download, CSV upload, cache, resampling
-  data_sources.py    OANDA / Twelve Data / Binance sources, API keys, Auto choice
-  http.py            HTTPS requests using the OS certificate store
-  review.py          MFE / MAE, planned R:R and the review chart payload
-  demo_market.py     synthetic candles for the demo account
   seed.py            `trade-journal-seed` command
 sample_data/         sample CSV (~200 USD trades across all five markets) and its generator
 tests/               pytest suite (metrics, import grouping, DB operations, page smoke tests)
@@ -361,12 +286,6 @@ docs/screenshots/    images used in this README
 |---|---|---|
 | `TRADE_JOURNAL_DB_URL` | `sqlite:///data/journal.db` | Any SQLAlchemy URL |
 | `TRADE_JOURNAL_DATA_DIR` | `data/` | Where the SQLite file and uploaded screenshots are stored |
-| `OANDA_API_TOKEN` / `OANDA_ENVIRONMENT` | – / `practice` | OANDA candles (overrides Settings) |
-| `TWELVEDATA_API_KEY` | – | Twelve Data candles (overrides Settings) |
-
-The review chart downloads candles from api-fxpractice.oanda.com (or api-fxtrade),
-api.twelvedata.com, data-api.binance.vision and query2.finance.yahoo.com. Without
-internet access, uploaded and previously downloaded candles still work.
 
 The models only use portable column types. To move to Postgres, add a driver
 (`uv add "psycopg[binary]"`) and set
@@ -393,9 +312,6 @@ pytest on every push and pull request.
 * Options are not modelled. An option symbol is treated as a stock with multiplier 1.
 * Without a position ID column, grouping is per account and symbol, so two overlapping
   positions in the same symbol in one account are treated as one trade.
-* Review charts from Yahoo Finance use futures prices for spot metals and oil CFDs, and
-  Yahoo's limited intraday history. Upload your broker's candles for exact levels or
-  older trades.
 * Order-history exports only show a stop order's final price, so a stop you moved
   before it triggered is recorded at its last level (or left empty if it ended past
   the entry). Edit it on the trade page if you need the original risk.
