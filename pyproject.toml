@@ -18,6 +18,7 @@ trade-journal-seed = "core.seed:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "watchdog>=6.0.0",
 ]
 
 [build-system]
