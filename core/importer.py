@@ -53,7 +53,7 @@ QTY_EPSILON = 1e-9
 
 # Canonical fields a CSV column can be mapped to.
 REQUIRED_FIELDS: tuple[str, ...] = ("symbol", "side", "quantity", "entry_price", "entry_time")
-ROUND_TRIP_FIELDS: tuple[str, ...] = ("exit_price", "exit_time", "fees")
+ROUND_TRIP_FIELDS: tuple[str, ...] = ("exit_price", "exit_time", "fees", "commission")
 # Columns found in broker order-history exports (one row per order).
 ORDER_HISTORY_FIELDS: tuple[str, ...] = (
     "status",
@@ -76,6 +76,7 @@ FIELD_LABELS: dict[str, str] = {
     "exit_price": "Exit price",
     "exit_time": "Exit time",
     "fees": "Fees / commission",
+    "commission": "Commission (if separate)",
     "status": "Order status",
     "order_type": "Order type",
     "stop_price": "Stop price",
@@ -86,6 +87,8 @@ FIELD_LABELS: dict[str, str] = {
 }
 
 FIELD_HELP: dict[str, str] = {
+    "commission": "Use when the export has separate fee and commission columns (e.g. "
+    "Topstep). Both are added up as the trade's costs.",
     "status": "Only rows with a filled status (Filled, Partially filled, Executed…) are "
     "imported; cancelled, rejected and pending orders are skipped.",
     "order_type": "Stop loss / take profit orders are treated as closing fills.",
@@ -104,7 +107,16 @@ FIELD_HELP: dict[str, str] = {
 # Earlier aliases win, so "Filled Qty" is preferred over "Qty" and "Avg Fill Price"
 # over "Limit Price".
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
-    "symbol": ("symbol", "ticker", "instrument", "stock", "code", "contract", "security"),
+    "symbol": (
+        "symbol",
+        "ticker",
+        "instrument",
+        "stock",
+        "code",
+        "contract",
+        "contractname",
+        "security",
+    ),
     "side": ("side", "direction", "action", "buy/sell", "type", "position"),
     "quantity": (
         "filledqty",
@@ -133,6 +145,7 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "entry_time": (
         "entrytime",
+        "enteredat",
         "opentime",
         "filltime",
         "executiontime",
@@ -144,13 +157,15 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "date",
     ),
     "exit_price": ("exitprice", "closeprice", "sellprice"),
-    "exit_time": ("exittime", "closetime", "exitdate", "closedate"),
+    "exit_time": ("exittime", "exitedat", "closetime", "exitdate", "closedate"),
     "fees": ("fees", "fee", "commission", "commissions", "comm", "charges", "brokerage"),
+    # Only matches when "fees" took another column (Fees + Commissions exports).
+    "commission": ("commissions", "commission", "comm"),
     "status": ("status", "orderstatus", "state"),
     "order_type": ("ordertype", "type"),
     "stop_price": ("stopprice", "stoplossprice", "stoploss", "sl"),
     "position_id": ("positionid", "positionticket", "positionno", "positionnumber"),
-    "order_id": ("orderid", "orderno", "ordernumber", "ticket", "dealid", "tradeid"),
+    "order_id": ("orderid", "orderno", "ordernumber", "ticket", "dealid", "tradeid", "id"),
     "net_closed_pnl": ("netclosedpl", "netclosedpnl", "netrealizedpl", "netrealisedpl"),
     "closed_pnl": (
         "closedpl",
@@ -199,6 +214,25 @@ BUILTIN_PRESETS: dict[str, tuple[dict[str, str], str | None]] = {
             "net_closed_pnl": "Net Closed P&L",
         },
         "%Y-%m-%d %H:%M:%S",
+    ),
+    # Topstep (TopstepX) trades export: one row per round trip. PnL is gross; Fees and
+    # Commissions are charged on top. Times carry a UTC offset; the wall-clock time
+    # as exported is kept.
+    "Topstep – trades": (
+        {
+            "symbol": "ContractName",
+            "side": "Type",
+            "quantity": "Size",
+            "entry_price": "EntryPrice",
+            "entry_time": "EnteredAt",
+            "exit_price": "ExitPrice",
+            "exit_time": "ExitedAt",
+            "fees": "Fees",
+            "commission": "Commissions",
+            "order_id": "Id",
+            "closed_pnl": "PnL",
+        },
+        "%m/%d/%Y %H:%M:%S %z",
     ),
 }
 
@@ -485,8 +519,8 @@ def rows_to_executions(
             entry_time = _parse_time(col(row, "entry_time"), fmt)
             if entry_price is None or entry_time is None:
                 raise ImportError_("missing entry price or time")
-            fees = _parse_number(col(row, "fees")) or 0.0
-            fees = abs(fees)
+            fees = abs(_parse_number(col(row, "fees")) or 0.0)
+            fees += abs(_parse_number(col(row, "commission")) or 0.0)
             exit_price = _parse_number(col(row, "exit_price"))
             exit_time = _parse_time(col(row, "exit_time"), fmt)
             if (exit_price is None) != (exit_time is None):
@@ -498,7 +532,21 @@ def rows_to_executions(
                 if exit_time < entry_time:
                     raise ImportError_("exit time is before entry time")
                 half = fees / 2
-                parsed.fills.append(Fill(symbol, side, qty, entry_price, entry_time, half))
+                # A row is one trade: its ID keeps the two legs together and lets a
+                # re-import skip both of them.
+                trade_key = position_id or order_id
+                parsed.fills.append(
+                    Fill(
+                        symbol,
+                        side,
+                        qty,
+                        entry_price,
+                        entry_time,
+                        half,
+                        order_id=f"{order_id}:entry" if order_id else "",
+                        position_id=trade_key,
+                    )
+                )
                 parsed.fills.append(
                     Fill(
                         symbol,
@@ -507,8 +555,11 @@ def rows_to_executions(
                         exit_price,
                         exit_time,
                         fees - half,
+                        order_id=f"{order_id}:exit" if order_id else "",
+                        position_id=trade_key,
                         is_exit=True,
                         realized_pnl=realized,
+                        realized_net_pnl=realized_net,
                     )
                 )
             else:

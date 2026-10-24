@@ -55,7 +55,8 @@ journal, skip the seed step; the app creates a default `Main` account (USD).
 ## CSV format
 
 Any CSV with a header row works. On the **Import** page the app recognises known broker
-exports (**Alchemy Markets** order history is built in) and maps the columns for you;
+exports (**Alchemy Markets** order history and the **Topstep** trades export are built
+in) and maps the columns for you;
 otherwise common header names are detected and you can adjust the mapping and save it as
 a broker preset. Before importing, the page previews how many fills, ignored orders and
 positions it found.
@@ -70,15 +71,16 @@ positions it found.
 | Exit price | no | Map together with exit time for round-trip rows |
 | Exit time | no | |
 | Fees | no | Commission plus other charges. On round-trip rows, half goes to each leg |
+| Commission | no | For exports with separate fee and commission columns (Topstep); added to the fees |
 | Order status | no | Order-history exports: only filled orders are imported (`Filled`, `Partially filled`, `Executed`…); cancelled, rejected and working orders are ignored. Rows with quantity 0 are always ignored |
 | Order type | no | `Stop Loss` / `Take Profit` orders are closing fills |
 | Stop price | no | The stop of the position's `Stop Loss` order becomes the trade's stop loss |
 | Position ID | no | Fills with the same broker position ID form one trade |
-| Order ID | no | Used to skip orders that were already imported |
+| Order ID | no | Used to skip orders that were already imported. On round-trip rows (e.g. Topstep `Id`) it also keeps each row as one trade |
 | Closed P&L | no | Broker's realised P&L (USD) on closing fills, used as gross P&L |
 | Net closed P&L | no | Broker's realised P&L after commission and swap, used as net P&L |
 
-Three layouts are supported:
+Four layouts are supported:
 
 1. **One row per execution (fill).** Map symbol, side, quantity, entry price/time and
    fees; leave exit price/time unmapped.
@@ -133,6 +135,23 @@ Three layouts are supported:
    * **Exits whose entry is missing.** A closing fill whose opening fill falls before the
      export's date range is skipped with a note. Import a longer range and it is added
      then.
+
+4. **Topstep trades export** (one row per round trip). Detected automatically from the
+   header:
+
+   ```csv
+   Id,ContractName,EnteredAt,ExitedAt,EntryPrice,ExitPrice,Fees,PnL,Size,Type,TradeDay,TradeDuration,Commissions
+   1000000001,NQZ6,10/20/2026 16:44:56 +08:00,10/20/2026 16:56:21 +08:00,21500.00,21450.00,2.7800,1000.00,1,Short,10/20/2026 00:00:00 -05:00,00:11:25,1.0000
+   ```
+
+   This is **one short NQ trade**: gross **+$1,000.00** (50 points × $20) and net
+   **+$996.22** after $2.78 fees and $1.00 commission. How the import handles this format:
+   * **Gross and net.** `PnL` is Topstep's gross P&L; net is `PnL − Fees − Commissions`.
+   * **Contracts.** `NQZ6`, `MNQZ6`, `MGCZ6` resolve to NQ ($20/point), MNQ ($2) and
+     Micro Gold MGC ($10, a commodity).
+   * **Times.** Times are kept as exported (the clock time shown in Topstep); the
+     `+08:00` offset is dropped. `TradeDay` and `TradeDuration` are not needed.
+   * **Re-imports.** Rows are matched by `Id`, so exporting overlapping ranges is safe.
 
 `sample_data/sample_trades.csv` uses the second layout. It has 245 rows that group into
 207 trades across US stocks (TSLA is the most traded), futures (ES, MES, MNQ), commodities

@@ -44,8 +44,9 @@ with csv_tab:
     if uploaded is None:
         st.info(
             "Upload a broker export. Three layouts work: one row per **order** (order "
-            "history, e.g. Alchemy Markets — detected automatically), one row per "
-            "**fill**, or one row per **round trip**. Cancelled orders are ignored, partial "
+            "history, e.g. Alchemy Markets), one row per **fill**, or one row per **round "
+            "trip** (e.g. the Topstep trades export). Alchemy Markets and Topstep files are "
+            "detected and mapped automatically. Cancelled orders are ignored, partial "
             "fills are grouped into trades and rows that were already imported are skipped. "
             "Try `sample_data/sample_trades.csv`."
         )
@@ -97,7 +98,7 @@ with csv_tab:
 
         with st.expander("Column mapping", expanded=not detected):
             st.markdown("**Every format**")
-            mapping_inputs((*REQUIRED_FIELDS, "fees"), ncols=3)
+            mapping_inputs((*REQUIRED_FIELDS, "fees", "commission"), ncols=4)
             st.markdown("**Order-history exports** (one row per order)")
             st.caption(
                 "Map these when the export lists orders: only filled orders are imported, "
@@ -106,6 +107,10 @@ with csv_tab:
             )
             mapping_inputs(ORDER_HISTORY_FIELDS, ncols=4)
             st.markdown("**Round-trip rows** (entry and exit on one row)")
+            st.caption(
+                "Map an ID column (Order ID above) so each row stays one trade and "
+                "re-imports are skipped; map Closed P&L to use the broker's P&L."
+            )
             mapping_inputs(("exit_price", "exit_time"), ncols=2)
             dt_format = st.text_input(
                 "Date/time format (optional, strftime syntax, e.g. `%d/%m/%Y %H:%M`)",
