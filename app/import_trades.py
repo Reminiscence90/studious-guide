@@ -165,6 +165,12 @@ with csv_tab:
                         f"{result.trades_created} new trades, {result.trades_updated} open "
                         f"trades updated. Skipped {result.duplicates_skipped} already-imported "
                         f"fills and {result.rows_skipped} cancelled / unfilled orders."
+                        + (
+                            f" Updated the broker P&L of {result.trades_refreshed} "
+                            "already-imported trades (tags and notes kept)."
+                            if result.trades_refreshed
+                            else ""
+                        )
                     )
                     if result.warnings:
                         with st.expander(f"ℹ️ {len(result.warnings)} positions not imported"):

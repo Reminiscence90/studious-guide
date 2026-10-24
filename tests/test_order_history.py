@@ -236,3 +236,50 @@ def test_position_without_any_opening_fill_is_still_reported(session: Session) -
     result = import_dataframe(session, 1, _rows(STOP), MAPPING, DATE_FORMAT)
     assert len(result.warnings) == 1
     assert session.scalars(select(Trade)).all() == []
+
+
+def test_reimport_refreshes_broker_pnl_and_keeps_tags(session: Session) -> None:
+    from core.models import Tag
+
+    entry = {
+        "Symbol": "AUDUSD.R",
+        "Side": "Sell",
+        "Type": "Limit",
+        "Filled Qty": "0.83",
+        "Avg Fill Price": "0.723",
+        "Status": "Filled",
+        "Update Time": "2026-09-09 21:28:44",
+        "Position ID": "AUDUSD.R:97065617",
+        "Commission": "-2.49",
+        "Order ID": "97065617",
+    }
+    take_profit = {
+        "Symbol": "AUDUSD.R",
+        "Side": "Buy",
+        "Type": "Take Profit",
+        "Filled Qty": "0.83",
+        "Avg Fill Price": "0.70499",
+        "Status": "Filled",
+        "Update Time": "2026-09-23 01:47:54",
+        "Position ID": "AUDUSD.R:97065617",
+        "Commission": "-2.49",
+        "Closed P&L": "1494.83",
+        "Order ID": "97065618",
+    }
+    import_dataframe(session, 1, _rows(entry, take_profit), MAPPING, DATE_FORMAT)
+    trade = _trade(session, "AUDUSD.R:97065617")
+    assert trade.net_pnl == pytest.approx(1494.83 - 4.98)  # no net figure: P&L − commission
+    trade.tags.append(session.scalars(select(Tag)).first())
+    session.flush()
+
+    corrected = {**take_profit, "Net Closed P&L": "1485.31"}
+    result = import_dataframe(session, 1, _rows(entry, corrected), MAPPING, DATE_FORMAT)
+    assert result.executions_imported == 0
+    assert result.trades_refreshed == 1
+    session.refresh(trade)
+    assert trade.net_pnl == pytest.approx(1485.31)
+    assert trade.gross_pnl == pytest.approx(1494.83)
+    assert len(trade.tags) == 1
+
+    again = import_dataframe(session, 1, _rows(entry, corrected), MAPPING, DATE_FORMAT)
+    assert again.trades_refreshed == 0

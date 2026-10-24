@@ -178,6 +178,10 @@ positions were scaled out of across several rows. Times are US Eastern. It was m
   otherwise the account, symbol, side, quantity, price, time and fees. Fingerprints that are already in the account are skipped, so
   re-importing an overlapping export is safe. Identical rows within one file are told
   apart by how many times they occur, so two genuine identical fills both import.
+* **Corrected broker P&L.** If an already-imported order comes back with a different
+  `Closed P&L` / `Net Closed P&L` (for example a net figure that was empty before), the
+  stored figure is updated and the trade recalculated. Its tags, notes and playbook are
+  kept.
 
 ## Markets and instruments
 

@@ -310,6 +310,9 @@ class ImportResult:
     duplicates_skipped: int = 0
     trades_created: int = 0
     trades_updated: int = 0
+    # Already-imported trades whose broker P&L changed in this file (e.g. a corrected
+    # Net Closed P&L); their tags, notes and playbook are kept.
+    trades_refreshed: int = 0
     rows_skipped: int = 0  # cancelled / rejected / unfilled orders
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -842,14 +845,48 @@ def recalculate_trades(session: Session) -> int:
         trade.symbol = normalise_symbol(trade.symbol, specs)
         for e in trade.executions:
             e.symbol = trade.symbol
-        fills = [_fill_from_execution(e) for e in trade.executions]
-        if not fills:
-            continue
-        is_closed = trade.status is TradeStatus.CLOSED
-        spec = resolve(trade.symbol, specs)
-        _apply_summary(trade, summarize_fills(fills, trade.side, is_closed, spec))
+        _resummarise(trade, specs)
     session.flush()
     return len(trades)
+
+
+def _resummarise(trade: Trade, specs: Mapping[str, InstrumentSpec]) -> None:
+    """Recompute a stored trade's figures from its executions."""
+    fills = [_fill_from_execution(e) for e in trade.executions]
+    if fills:
+        is_closed = trade.status is TradeStatus.CLOSED
+        spec = resolve(trade.symbol, dict(specs))
+        _apply_summary(trade, summarize_fills(fills, trade.side, is_closed, spec))
+
+
+def _refresh_broker_pnl(session: Session, account_id: int, duplicates: Sequence[Fill]) -> set[int]:
+    """Update the broker's realised P&L on already-imported fills when the file has a
+    new value (e.g. a Net Closed P&L that was empty before). Returns the trade IDs."""
+    with_pnl = {
+        f.import_hash: f
+        for f in duplicates
+        if f.realized_pnl is not None or f.realized_net_pnl is not None
+    }
+    changed: set[int] = set()
+    hashes = list(with_pnl)
+    for i in range(0, len(hashes), 500):
+        stored = session.scalars(
+            select(Execution).where(
+                Execution.account_id == account_id,
+                Execution.import_hash.in_(hashes[i : i + 500]),
+            )
+        )
+        for e in stored:
+            f = with_pnl[e.import_hash]
+            new = (
+                e.realized_pnl if f.realized_pnl is None else f.realized_pnl,
+                e.realized_net_pnl if f.realized_net_pnl is None else f.realized_net_pnl,
+            )
+            if new != (e.realized_pnl, e.realized_net_pnl) and e.trade_id is not None:
+                e.realized_pnl, e.realized_net_pnl = new
+                changed.add(e.trade_id)
+    session.flush()
+    return changed
 
 
 def _fill_from_execution(e: Execution) -> Fill:
@@ -901,6 +938,9 @@ def import_fills(
             )
         )
     new_fills = [f for f in fills if f.import_hash not in existing]
+    refreshed = _refresh_broker_pnl(
+        session, account_id, [f for f in fills if f.import_hash in existing]
+    )
     # Already-imported fills per position: they link new fills to the stored trade.
     known_hashes: dict[tuple[str, str], list[str]] = defaultdict(list)
     for f in fills:
@@ -908,8 +948,6 @@ def import_fills(
             known_hashes[(f.symbol, f.position_id)].append(f.import_hash)
     result.duplicates_skipped = len(fills) - len(new_fills)
     result.executions_imported = len(new_fills)
-    if not new_fills:
-        return result
 
     by_key: dict[tuple[str, str], list[Fill]] = defaultdict(list)
     for f in new_fills:
@@ -979,6 +1017,12 @@ def import_fills(
                         source=source,
                     )
                 )
+    # Refreshed trades that were not regrouped above get their figures recomputed.
+    for trade_id in refreshed - set(result.trade_ids):
+        trade = session.get(Trade, trade_id)
+        if trade is not None:
+            _resummarise(trade, specs)
+            result.trades_refreshed += 1
     session.flush()
     session.expire_all()
     return result
