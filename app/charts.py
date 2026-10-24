@@ -10,7 +10,17 @@ from core.metrics import JournalScore
 BLUE = "#2a78d6"
 POSITIVE = "#1baf7a"
 NEGATIVE = "#e34948"
+NEUTRAL = "#888888"
 GRID = "rgba(128,128,128,0.15)"
+
+
+def pnl_color(value: float) -> str:
+    """Green for a profit, red for a loss, grey for break-even."""
+    return POSITIVE if value > 0 else NEGATIVE if value < 0 else NEUTRAL
+
+
+def _bar_colors(values: pd.Series) -> list[str]:
+    return [POSITIVE if v >= 0 else NEGATIVE for v in values]
 
 
 def _layout(fig: go.Figure, height: int = 340, **kwargs: object) -> go.Figure:
@@ -67,12 +77,11 @@ def equity_curve_figure(curve: pd.DataFrame, currency: str) -> go.Figure:
 def daily_pnl_figure(daily: pd.DataFrame, currency: str) -> go.Figure:
     if daily.empty:
         return empty_figure()
-    colors = [POSITIVE if v >= 0 else NEGATIVE for v in daily["net_pnl"]]
     fig = go.Figure(
         go.Bar(
             x=pd.to_datetime(daily["date"]),
             y=daily["net_pnl"],
-            marker={"color": colors, "cornerradius": 4},
+            marker={"color": _bar_colors(daily["net_pnl"]), "cornerradius": 4},
             customdata=daily[["trades", "wins"]],
             hovertemplate=(
                 f"%{{x|%a %d %b %Y}}<br>%{{y:+,.2f}} {currency}"
@@ -121,7 +130,6 @@ def breakdown_bar_figure(
         return empty_figure("No data")
     groups = table["group"].astype(str)
     values = table["net_pnl"].astype(float)
-    colors = [POSITIVE if v >= 0 else NEGATIVE for v in values]
     hover = (
         "%{customdata[0]}<br>%{customdata[1]:+,.2f} " + currency + "<br>%{customdata[2]} trades, "
         "%{customdata[3]:.0%} win rate<extra></extra>"
@@ -138,7 +146,7 @@ def breakdown_bar_figure(
         x=values if horizontal else groups,
         y=groups if horizontal else values,
         orientation="h" if horizontal else "v",
-        marker={"color": colors, "cornerradius": 4},
+        marker={"color": _bar_colors(values), "cornerradius": 4},
         customdata=custom,
         hovertemplate=hover,
     )

@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 from core.db import get_engine
@@ -23,6 +24,12 @@ PAGES = [
     "import_trades.py",
     "settings.py",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _fresh_app_engine() -> None:
+    """The app caches its engine per process; drop it so each test uses its own database."""
+    st.cache_resource.clear()
 
 
 @pytest.fixture(scope="module")
@@ -83,3 +90,34 @@ def test_page_renders_on_an_empty_journal(
     at = AppTest.from_file(APP, default_timeout=30).run()
     at.switch_page(page).run()
     assert not at.exception, [e.value for e in at.exception]
+
+
+def test_trade_detail_edits_are_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from core.models import Trade
+
+    url = f"sqlite:///{tmp_path / 'edit.db'}"
+    monkeypatch.setenv("TRADE_JOURNAL_DB_URL", url)
+    seed(get_engine(url))
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.switch_page("trade_detail.py").run()
+    trade_id = at.selectbox(key="trade_picker").value
+
+    at.text_area(key=f"notes_{trade_id}").input("Waited for the retest.")
+    next(b for b in at.button if b.label == "Save notes").click().run()
+    at.multiselect(key=f"tags_mistake_{trade_id}").select("FOMO entry")
+    next(b for b in at.button if b.label == "Save tags").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    with Session(get_engine(url)) as s:
+        trade = s.get(Trade, trade_id)
+        assert trade is not None
+        assert trade.notes == "Waited for the retest."
+        assert "FOMO entry" in {t.name for t in trade.tags}
+
+    next(b for b in at.button if b.label == "Confirm delete").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    with Session(get_engine(url)) as s:
+        assert s.get(Trade, trade_id) is None
+        assert s.scalars(select(Trade)).first() is not None

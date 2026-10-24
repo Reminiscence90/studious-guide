@@ -8,17 +8,17 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import select
 
-from app.common import db, fmt_money, get_filters, load_filtered_trades
+from app.charts import NEGATIVE, POSITIVE
+from app.common import db, fmt_money, get_filters, load_filtered_trades, open_trade
 from core import metrics as m
+from core.journal import MOODS, get_journal_entry
 from core.models import JournalEntry
 
 WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-MOODS = {1: "😞", 2: "🙁", 3: "😐", 4: "🙂", 5: "😄"}
 
 filters = get_filters()
 cur = filters.currency
 df = load_filtered_trades(filters)
-closed = m.closed_trades(df)
 daily = m.daily_pnl(df)
 daily_by_date = daily.set_index("date") if not daily.empty else pd.DataFrame()
 
@@ -59,7 +59,7 @@ with db() as s:
         for j in s.scalars(
             select(JournalEntry).where(
                 JournalEntry.day >= date(year, month, 1),
-                JournalEntry.day <= date(year + month // 12, month % 12 + 1, 1),
+                JournalEntry.day < date(year + month // 12, month % 12 + 1, 1),
             )
         )
     }
@@ -81,7 +81,7 @@ s4.metric("Trades", int(in_month["trades"].sum()) if len(in_month) else 0)
 
 @st.dialog("Day details", width="large")
 def show_day(day: date) -> None:
-    trades = closed[closed["exit_time"].dt.date == day] if not closed.empty else closed
+    trades = m.trades_closed_on(df, day)
     pnl = float(trades["net_pnl"].sum()) if len(trades) else 0.0
     st.subheader(f"{day:%A, %d %B %Y}")
     st.write(f"**{fmt_money(pnl, cur)}** across {len(trades)} trades")
@@ -106,13 +106,12 @@ def show_day(day: date) -> None:
         st.caption("Select a row to open the trade.")
         rows = event.selection.rows if event else []
         if rows:
-            st.session_state["selected_trade_id"] = int(table.iloc[rows[0]]["id"])
-            st.switch_page("trade_detail.py")
+            open_trade(int(table.iloc[rows[0]]["id"]))
 
     st.divider()
     st.subheader("Journal")
     with db() as s:
-        entry = s.scalars(select(JournalEntry).where(JournalEntry.day == day)).first()
+        entry = get_journal_entry(s, day)
         content = (
             None
             if entry is None
@@ -123,7 +122,7 @@ def show_day(day: date) -> None:
     else:
         mood, plan, review, notes = content
         if mood:
-            st.write(f"Mood: {MOODS[mood]} ({mood}/5)")
+            st.write(f"Mood: {MOODS[mood][0]} ({mood}/5)")
         if plan:
             st.markdown(f"**Pre-market plan**\n\n{plan}")
         if review:
@@ -154,9 +153,9 @@ for week in grid:
             continue
         pnl = float(daily_by_date.loc[d, "net_pnl"])
         bg, border = (
-            ("rgba(27,175,122,0.18)", "#1baf7a")
+            ("rgba(27,175,122,0.18)", POSITIVE)
             if pnl > 0
-            else ("rgba(227,73,72,0.16)", "#e34948")
+            else ("rgba(227,73,72,0.16)", NEGATIVE)
             if pnl < 0
             else ("rgba(128,128,128,0.12)", "#888")
         )
@@ -176,7 +175,7 @@ for week in grid:
             if d is None:
                 st.html("<div style='min-height:92px'></div>")
                 continue
-            mood = MOODS.get(moods.get(d) or 0, "")
+            mood = MOODS[moods[d]][0] if moods.get(d) in MOODS else ""
             if d in daily_by_date.index:
                 row = daily_by_date.loc[d]
                 n = int(row["trades"])

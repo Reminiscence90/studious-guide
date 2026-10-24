@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.charts import breakdown_bar_figure, equity_curve_figure
 from app.common import (
     db,
+    delete_record,
     fmt_money,
     fmt_pct,
     fmt_ratio,
@@ -139,11 +140,7 @@ for tab, values in zip(tabs, playbooks, strict=False):
         with st.expander("Edit playbook"):
             playbook_form(f"edit_pb_{pid}", values)
             if st.button("Delete playbook", key=f"del_pb_{pid}"):
-                with db() as s:
-                    obj = s.get(Playbook, pid)
-                    if obj is not None:
-                        s.delete(obj)
-                st.rerun()
+                delete_record(Playbook, pid)
 
 with tabs[-1]:
     st.caption("Link trades to a playbook from the trade detail page.")

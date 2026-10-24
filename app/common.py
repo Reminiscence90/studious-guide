@@ -18,10 +18,6 @@ from core.instruments import ACCOUNT_CURRENCY, AssetClass
 from core.models import Account, Trade
 from core.repository import load_trades
 
-GREEN = "#16a34a"
-RED = "#dc2626"
-NEUTRAL = "#64748b"
-
 DATE_PRESETS = ["All time", "This month", "Last 30 days", "Last 90 days", "Year to date", "Custom"]
 
 
@@ -131,10 +127,14 @@ def get_filters() -> Filters:
     return filters
 
 
+def _missing(value: float | None) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
 def fmt_money(
     value: float | None, currency: str = "", signed: bool = True, decimals: int = 2
 ) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _missing(value):
         return "–"
     sign = "+" if signed and value > 0 else "-" if value < 0 else ""
     prefix = f"{currency} " if currency else ""
@@ -143,13 +143,13 @@ def fmt_money(
 
 def fmt_tile_money(value: float | None, signed: bool = True) -> str:
     """Money for narrow stat tiles: whole dollars from 10,000 so the figure fits."""
-    big = value is not None and not math.isnan(value) and abs(value) >= 10_000
+    big = not _missing(value) and abs(value) >= 10_000
     return fmt_money(value, signed=signed, decimals=0 if big else 2)
 
 
 def fmt_price(value: float | None) -> str:
     """Prices with the precision the market needs: 1.16523, 147.512, 431.20, 112,503.50."""
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _missing(value):
         return "–"
     decimals = 5 if abs(value) < 10 else 3 if abs(value) < 1000 else 2
     text = f"{value:,.{decimals}f}"
@@ -166,7 +166,7 @@ def fmt_qty(value: float) -> str:
 
 
 def fmt_ratio(value: float | None, digits: int = 2) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _missing(value):
         return "–"
     if math.isinf(value):
         return "∞"
@@ -174,13 +174,9 @@ def fmt_ratio(value: float | None, digits: int = 2) -> str:
 
 
 def fmt_pct(value: float | None) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if _missing(value):
         return "–"
     return f"{value * 100:.1f}%"
-
-
-def pnl_color(value: float) -> str:
-    return GREEN if value > 0 else RED if value < 0 else NEUTRAL
 
 
 def open_trade(trade_id: int) -> None:
@@ -197,6 +193,15 @@ def load_filtered_trades(filters: Filters | None = None) -> pd.DataFrame:
     if filters.asset_classes:
         df = df[df["asset_class"].isin(filters.asset_classes)]
     return df
+
+
+def delete_record(model: type, record_id: int) -> None:
+    """Delete one row (if it still exists) and refresh the page."""
+    with db() as s:
+        record = s.get(model, record_id)
+        if record is not None:
+            s.delete(record)
+    st.rerun()
 
 
 def stat_tile(label: str, value: str, help: str | None = None) -> None:

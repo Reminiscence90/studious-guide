@@ -6,10 +6,11 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 
-from app.common import db
+from app.common import db, delete_record
 from core.importer import recalculate_trades, replace_instruments
 from core.instruments import ACCOUNT_CURRENCY, AssetClass, InstrumentSpec
 from core.models import Account, BrokerPreset, Instrument, Tag, TagCategory, Trade, trade_tags
+from core.trades import get_or_create_tag
 
 st.title("Settings")
 
@@ -38,11 +39,7 @@ for acc_id, name, n_trades in account_rows:
         if len(account_rows) > 1 and st.button(
             "Delete account and its trades", key=f"del_acc_{acc_id}"
         ):
-            with db() as s:
-                acc = s.get(Account, acc_id)
-                if acc is not None:
-                    s.delete(acc)
-            st.rerun()
+            delete_record(Account, acc_id)
 
 with st.form("new_account", clear_on_submit=True):
     st.subheader("Add account")
@@ -149,20 +146,12 @@ for col, category in zip(tag_cols, TagCategory, strict=True):
             c1, c2 = st.columns([4, 1])
             c1.write(f"{tag_name} · {usage.get(tag_id, 0)} trades")
             if c2.button("✕", key=f"del_tag_{tag_id}", help="Delete tag"):
-                with db() as s:
-                    tag = s.get(Tag, tag_id)
-                    if tag is not None:
-                        s.delete(tag)
-                st.rerun()
+                delete_record(Tag, tag_id)
         with st.form(f"new_tag_{category.value}", clear_on_submit=True):
             new_tag = st.text_input("New tag", key=f"new_tag_input_{category.value}")
             if st.form_submit_button("Add") and new_tag.strip():
                 with db() as s:
-                    exists = s.scalars(
-                        select(Tag).where(Tag.name == new_tag.strip(), Tag.category == category)
-                    ).first()
-                    if exists is None:
-                        s.add(Tag(name=new_tag.strip(), category=category))
+                    get_or_create_tag(s, new_tag, category)
                 st.rerun()
 
 # ------------------------------------------------------------------ presets
@@ -179,8 +168,4 @@ for preset_id, preset_name, mapping, fmt in presets:
         st.json(mapping)
         st.caption(f"Date format: {fmt or 'auto-detect'}")
         if st.button("Delete preset", key=f"del_preset_{preset_id}"):
-            with db() as s:
-                preset = s.get(BrokerPreset, preset_id)
-                if preset is not None:
-                    s.delete(preset)
-            st.rerun()
+            delete_record(BrokerPreset, preset_id)

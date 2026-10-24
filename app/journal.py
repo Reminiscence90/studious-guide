@@ -9,14 +9,11 @@ from sqlalchemy import select
 
 from app.common import db, fmt_money, get_filters, load_filtered_trades
 from core import metrics as m
-from core.journal import get_journal_entry, save_journal_entry
+from core.journal import MOODS, get_journal_entry, save_journal_entry
 from core.models import JournalEntry
-
-MOODS = {1: "😞 Awful", 2: "🙁 Bad", 3: "😐 Neutral", 4: "🙂 Good", 5: "😄 Great"}
 
 filters = get_filters()
 df = load_filtered_trades(filters)
-closed = m.closed_trades(df)
 daily = m.daily_pnl(df)
 
 st.title("Daily journal")
@@ -26,7 +23,7 @@ if default_day is None:
     default_day = daily["date"].iloc[-1] if not daily.empty else date.today()
 day = st.date_input("Trading day", value=default_day, format="YYYY-MM-DD")
 
-day_trades = closed[closed["exit_time"].dt.date == day] if not closed.empty else closed
+day_trades = m.trades_closed_on(df, day)
 pnl = float(day_trades["net_pnl"].sum()) if len(day_trades) else 0.0
 wins = int((day_trades["net_pnl"] > 0).sum()) if len(day_trades) else 0
 
@@ -74,7 +71,7 @@ with st.form(f"journal_{day}"):
         "Mood",
         [None, *MOODS],
         index=[None, *MOODS].index(mood),
-        format_func=lambda v: "Not set" if v is None else MOODS[v],
+        format_func=lambda v: "Not set" if v is None else " ".join(MOODS[v]),
         horizontal=True,
     )
     new_notes = st.text_area("Notes (markdown)", value=notes, height=100)
@@ -104,7 +101,7 @@ else:
     st.dataframe(
         {
             "Day": [d for d, _, _ in recent],
-            "Mood": [MOODS.get(mo, "") if mo else "" for _, mo, _ in recent],
+            "Mood": [" ".join(MOODS[mo]) if mo in MOODS else "" for _, mo, _ in recent],
             "Day P&L": [pnl_by_day.get(d) for d, _, _ in recent],
             "Summary": [text[:120] for _, _, text in recent],
         },

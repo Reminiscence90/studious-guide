@@ -10,6 +10,15 @@ from sqlalchemy.orm import Session
 
 from core.models import JournalEntry, Playbook, PlaybookChecklistItem
 
+# Mood scale of a journal entry: value -> (emoji, label).
+MOODS: dict[int, tuple[str, str]] = {
+    1: ("😞", "Awful"),
+    2: ("🙁", "Bad"),
+    3: ("😐", "Neutral"),
+    4: ("🙂", "Good"),
+    5: ("😄", "Great"),
+}
+
 
 def get_journal_entry(session: Session, day: date) -> JournalEntry | None:
     return session.scalars(select(JournalEntry).where(JournalEntry.day == day)).first()

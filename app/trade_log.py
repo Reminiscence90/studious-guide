@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from app.common import fmt_money, get_filters, load_filtered_trades
+from app.common import fmt_money, get_filters, load_filtered_trades, open_trade
 from core import metrics as m
 from core.instruments import AssetClass
 
@@ -98,8 +98,7 @@ event = st.dataframe(
 
 rows = event.selection.rows if event else []
 if rows:
-    st.session_state["selected_trade_id"] = int(table.iloc[rows[0]]["id"])
-    st.switch_page("trade_detail.py")
+    open_trade(int(table.iloc[rows[0]]["id"]))
 
 export = table.assign(
     setups=table["setups"].map(", ".join),

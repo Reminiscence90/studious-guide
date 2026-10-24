@@ -22,14 +22,14 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
 import pandas as pd
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from core.instruments import (
     AssetClass,
@@ -282,10 +282,6 @@ class TradeGroup:
     def side(self) -> TradeSide:
         return TradeSide.LONG if self.fills[0].side is ExecutionSide.BUY else TradeSide.SHORT
 
-    @property
-    def entry_side(self) -> ExecutionSide:
-        return ExecutionSide.BUY if self.side is TradeSide.LONG else ExecutionSide.SELL
-
     def summary(self, spec: InstrumentSpec | None = None) -> TradeSummary:
         return summarize_fills(self.fills, self.side, self.is_closed, spec)
 
@@ -379,6 +375,38 @@ def _opposite(side: ExecutionSide) -> ExecutionSide:
     return ExecutionSide.SELL if side is ExecutionSide.BUY else ExecutionSide.BUY
 
 
+def _entry_side(side: TradeSide) -> ExecutionSide:
+    return ExecutionSide.BUY if side is TradeSide.LONG else ExecutionSide.SELL
+
+
+def _round_trip(
+    symbol: str,
+    side: ExecutionSide,
+    quantity: float,
+    entry: tuple[float, datetime],
+    exit_: tuple[float, datetime],
+    fees: float,
+    *,
+    order_id: str = "",
+    position_id: str = "",
+    realized_pnl: float | None = None,
+    realized_net_pnl: float | None = None,
+) -> list[Fill]:
+    """The opening and closing fill of a one-row round trip; fees are split half per leg.
+
+    With an ID the two legs get distinct order IDs (so a re-import skips both) and
+    share a position ID (so they always form one trade)."""
+    half = fees / 2
+    leg_id = (lambda leg: f"{order_id}:{leg}") if order_id else (lambda leg: "")
+    return [
+        Fill(symbol, side, quantity, *entry, half, order_id=leg_id("entry"),
+             position_id=position_id),
+        Fill(symbol, _opposite(side), quantity, *exit_, fees - half, order_id=leg_id("exit"),
+             position_id=position_id, is_exit=True, realized_pnl=realized_pnl,
+             realized_net_pnl=realized_net_pnl),
+    ]  # fmt: skip
+
+
 def _parse_number(value: Any) -> float | None:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -390,17 +418,36 @@ def _parse_number(value: Any) -> float | None:
     return float(text)
 
 
-def _parse_time(value: Any, fmt: str | None) -> datetime | None:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    if isinstance(value, str) and value.strip() == "":
-        return None
-    ts = pd.to_datetime(value, format=fmt) if fmt else pd.to_datetime(value)
-    if pd.isna(ts):
-        return None
-    if ts.tzinfo is not None:
-        ts = ts.tz_localize(None)
-    return ts.to_pydatetime()
+def _parse_time_text(text: str, fmt: str | None) -> datetime | None:
+    """Parse one timestamp; a UTC offset is dropped, keeping the wall-clock time.
+
+    ``strptime``/``fromisoformat`` handle the common cases quickly; anything else goes
+    through pandas, which is slower but accepts more spellings."""
+    try:
+        ts = datetime.strptime(text, fmt) if fmt else datetime.fromisoformat(text)
+    except ValueError:
+        parsed = pd.to_datetime(text, format=fmt) if fmt else pd.to_datetime(text)
+        if pd.isna(parsed):
+            return None
+        ts = parsed.to_pydatetime()
+    return ts.replace(tzinfo=None)
+
+
+def _time_parser(fmt: str | None) -> Callable[[Any], datetime | None]:
+    """A timestamp parser for one import; repeated values are parsed once."""
+    cache: dict[str, datetime | None] = {}
+
+    def parse(value: Any) -> datetime | None:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if text not in cache:
+            cache[text] = _parse_time_text(text, fmt)
+        return cache[text]
+
+    return parse
 
 
 def validate_mapping(mapping: Mapping[str, str | None], columns: Iterable[str]) -> list[str]:
@@ -478,16 +525,15 @@ def rows_to_executions(
         raise ImportError_("; ".join(problems))
 
     parsed = ParsedRows()
-    fmt = datetime_format or None
+    parse_time = _time_parser(datetime_format or None)
     # (raw symbol, order id, position id, stop price) of stop-loss orders, any status.
     stops: list[tuple[str, str, str, float]] = []
 
-    def col(row: pd.Series, fld: str) -> Any:
+    def col(row: dict[str, Any], fld: str) -> Any:
         name = mapping.get(fld)
         return row[name] if name else None
 
-    for pos, (_, row) in enumerate(df.iterrows()):
-        line = pos + 2  # header is line 1
+    for line, row in enumerate(df.to_dict("records"), start=2):  # header is line 1
         try:
             # Kept as written; import_fills normalises it (XAUUSD.R → XAUUSD).
             symbol = str(col(row, "symbol")).strip().upper()
@@ -516,13 +562,13 @@ def rows_to_executions(
             if qty < 0:  # some brokers sign quantities instead of using a side column
                 qty = abs(qty)
             entry_price = _parse_number(col(row, "entry_price"))
-            entry_time = _parse_time(col(row, "entry_time"), fmt)
+            entry_time = parse_time(col(row, "entry_time"))
             if entry_price is None or entry_time is None:
                 raise ImportError_("missing entry price or time")
             fees = abs(_parse_number(col(row, "fees")) or 0.0)
             fees += abs(_parse_number(col(row, "commission")) or 0.0)
             exit_price = _parse_number(col(row, "exit_price"))
-            exit_time = _parse_time(col(row, "exit_time"), fmt)
+            exit_time = parse_time(col(row, "exit_time"))
             if (exit_price is None) != (exit_time is None):
                 raise ImportError_("exit price and exit time must both be set or both empty")
             realized = _parse_number(col(row, "closed_pnl"))
@@ -531,36 +577,17 @@ def rows_to_executions(
             if exit_price is not None and exit_time is not None:
                 if exit_time < entry_time:
                     raise ImportError_("exit time is before entry time")
-                half = fees / 2
-                # A row is one trade: its ID keeps the two legs together and lets a
-                # re-import skip both of them.
-                trade_key = position_id or order_id
-                parsed.fills.append(
-                    Fill(
-                        symbol,
-                        side,
-                        qty,
-                        entry_price,
-                        entry_time,
-                        half,
-                        order_id=f"{order_id}:entry" if order_id else "",
-                        position_id=trade_key,
-                    )
-                )
-                parsed.fills.append(
-                    Fill(
-                        symbol,
-                        _opposite(side),
-                        qty,
-                        exit_price,
-                        exit_time,
-                        fees - half,
-                        order_id=f"{order_id}:exit" if order_id else "",
-                        position_id=trade_key,
-                        is_exit=True,
-                        realized_pnl=realized,
-                        realized_net_pnl=realized_net,
-                    )
+                parsed.fills += _round_trip(
+                    symbol,
+                    side,
+                    qty,
+                    (entry_price, entry_time),
+                    (exit_price, exit_time),
+                    fees,
+                    order_id=order_id,
+                    position_id=position_id or order_id,
+                    realized_pnl=realized,
+                    realized_net_pnl=realized_net,
                 )
             else:
                 parsed.fills.append(
@@ -723,7 +750,7 @@ def summarize_fills(
     * net P&L: gross P&L minus all fees; or, if every closing fill carries the broker's
       net realised P&L, their sum (which includes swap/financing).
     """
-    entry_side = ExecutionSide.BUY if side is TradeSide.LONG else ExecutionSide.SELL
+    entry_side = _entry_side(side)
     entries = [f for f in fills if f.side is entry_side]
     exits = [f for f in fills if f.side is not entry_side]
     entry_qty = sum(f.quantity for f in entries)
@@ -780,12 +807,7 @@ def _apply_summary(trade: Trade, summary: TradeSummary) -> None:
 
 def load_specs(session: Session) -> dict[str, InstrumentSpec]:
     """Instrument specs from the database (the built-in catalog if the table is empty)."""
-    specs = {
-        row.symbol: InstrumentSpec(
-            row.symbol, row.asset_class, row.multiplier, row.quote_currency, row.name
-        )
-        for row in session.scalars(select(Instrument))
-    }
+    specs = {row.symbol: row.to_spec() for row in session.scalars(select(Instrument))}
     return specs or default_specs()
 
 
@@ -804,16 +826,7 @@ def replace_instruments(session: Session, specs: Sequence[InstrumentSpec]) -> No
     for row in session.scalars(select(Instrument)):
         session.delete(row)
     session.flush()
-    session.add_all(
-        Instrument(
-            symbol=s.symbol,
-            name=s.name,
-            asset_class=s.asset_class,
-            multiplier=s.multiplier,
-            quote_currency=s.quote_currency,
-        )
-        for s in cleaned.values()
-    )
+    session.add_all(Instrument.from_spec(s) for s in cleaned.values())
     session.flush()
 
 
@@ -823,7 +836,7 @@ def recalculate_trades(session: Session) -> int:
     Use after changing a multiplier. Returns the number of trades updated.
     """
     specs = load_specs(session)
-    trades = session.scalars(select(Trade)).all()
+    trades = session.scalars(select(Trade).options(selectinload(Trade.executions))).all()
     for trade in trades:
         # Re-normalise with the current instruments (US500.R → US500 once US500 is known).
         trade.symbol = normalise_symbol(trade.symbol, specs)
@@ -908,7 +921,7 @@ def import_fills(
                 session, account_id, symbol, position_id, known_hashes[(symbol, position_id)]
             )
         else:
-            open_trade = _open_trade_for(session, account_id, symbol, position_id)
+            open_trade = _open_trade_for(session, account_id, symbol)
         prior: list[Fill] = []
         if open_trade is not None:
             prior = [_fill_from_execution(e) for e in open_trade.executions]
@@ -986,21 +999,15 @@ def initial_stop(summary: TradeSummary, fills: Sequence[Fill]) -> float | None:
     return stop if on_risk_side else None
 
 
-def _open_trade_for(
-    session: Session, account_id: int, symbol: str, position_id: str
-) -> Trade | None:
-    """The open trade new fills should continue: the trade holding the same broker
-    position, or (without a position ID) the open trade in the symbol that is not
-    tracked by position ID."""
+def _open_trade_for(session: Session, account_id: int, symbol: str) -> Trade | None:
+    """The open trade that fills without a position ID continue: the open trade in the
+    symbol that is not tracked by position ID."""
     stmt = select(Trade).where(
         Trade.account_id == account_id,
         Trade.symbol == symbol,
         Trade.status == TradeStatus.OPEN,
+        ~Trade.executions.any(Execution.position_id.is_not(None)),
     )
-    if position_id:
-        stmt = stmt.where(Trade.executions.any(Execution.position_id == position_id))
-    else:
-        stmt = stmt.where(~Trade.executions.any(Execution.position_id.is_not(None)))
     return session.scalars(stmt.order_by(Trade.entry_time.desc())).first()
 
 
@@ -1065,14 +1072,11 @@ def add_manual_trade(
     symbol = symbol.strip().upper()
     if not symbol:
         raise ImportError_("Symbol is required")
-    entry_side = ExecutionSide.BUY if side is TradeSide.LONG else ExecutionSide.SELL
-    fills = []
+    entry_side = _entry_side(side)
     if exit_price is not None and exit_time is not None:
-        half = fees / 2
-        fills = [
-            Fill(symbol, entry_side, quantity, entry_price, entry_time, half),
-            Fill(symbol, _opposite(entry_side), quantity, exit_price, exit_time, fees - half),
-        ]
+        fills = _round_trip(
+            symbol, entry_side, quantity, (entry_price, entry_time), (exit_price, exit_time), fees
+        )
     else:
         fills = [Fill(symbol, entry_side, quantity, entry_price, entry_time, fees)]
     result = import_fills(session, account_id, fills, source="manual")

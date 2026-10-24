@@ -27,10 +27,12 @@ Definitions
 
 from __future__ import annotations
 
+import calendar
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date
+from typing import Any
 
 import pandas as pd
 
@@ -69,6 +71,47 @@ def _pnl(df: pd.DataFrame) -> pd.Series:
     return closed_trades(df)["net_pnl"].astype(float)
 
 
+def _pnl_stats(pnl: pd.Series) -> dict[str, Any]:
+    """All count/ratio statistics of a series of closed-trade P&L, in one pass."""
+    values = pnl.to_numpy(dtype=float)
+    n = len(values)
+    wins, losses = values[values > 0], values[values < 0]
+    gp, gl = float(wins.sum()), float(losses.sum())
+    aw = float(wins.mean()) if len(wins) else None
+    al = float(-losses.mean()) if len(losses) else None
+    wr = len(wins) / n if n else None
+    lr = len(losses) / n if n else None
+    pf = gp / abs(gl) if gl else (math.inf if gp > 0 else None)
+    if aw is None and al is None:
+        ratio = None
+    elif al is None:
+        ratio = math.inf
+    elif aw is None:
+        ratio = 0.0
+    else:
+        ratio = aw / al
+    exp = None if wr is None or lr is None else wr * (aw or 0.0) - lr * (al or 0.0)
+    return {
+        "total_trades": n,
+        "wins": len(wins),
+        "losses": len(losses),
+        "net_pnl": float(values.sum()),
+        "gross_profit": gp,
+        "gross_loss": gl,
+        "win_rate": wr,
+        "loss_rate": lr,
+        "profit_factor": pf,
+        "avg_win": aw,
+        "avg_loss": al,
+        "avg_win_loss_ratio": ratio,
+        "expectancy": exp,
+    }
+
+
+def _stat(df: pd.DataFrame, name: str) -> Any:
+    return _pnl_stats(_pnl(df))[name]
+
+
 def total_trades(df: pd.DataFrame) -> int:
     return len(closed_trades(df))
 
@@ -78,71 +121,56 @@ def net_pnl(df: pd.DataFrame) -> float:
 
 
 def gross_profit(df: pd.DataFrame) -> float:
-    pnl = _pnl(df)
-    return float(pnl[pnl > 0].sum())
+    return _stat(df, "gross_profit")
 
 
 def gross_loss(df: pd.DataFrame) -> float:
     """Sum of losing trades (a negative number, or 0)."""
-    pnl = _pnl(df)
-    return float(pnl[pnl < 0].sum())
+    return _stat(df, "gross_loss")
 
 
 def win_count(df: pd.DataFrame) -> int:
-    return int((_pnl(df) > 0).sum())
+    return _stat(df, "wins")
 
 
 def loss_count(df: pd.DataFrame) -> int:
-    return int((_pnl(df) < 0).sum())
+    return _stat(df, "losses")
 
 
 def win_rate(df: pd.DataFrame) -> float | None:
-    n = total_trades(df)
-    return win_count(df) / n if n else None
+    return _stat(df, "win_rate")
 
 
 def loss_rate(df: pd.DataFrame) -> float | None:
-    n = total_trades(df)
-    return loss_count(df) / n if n else None
+    return _stat(df, "loss_rate")
 
 
 def profit_factor(df: pd.DataFrame) -> float | None:
-    gp, gl = gross_profit(df), gross_loss(df)
-    if gl == 0:
-        return math.inf if gp > 0 else None
-    return gp / abs(gl)
+    return _stat(df, "profit_factor")
 
 
 def avg_win(df: pd.DataFrame) -> float | None:
-    pnl = _pnl(df)
-    wins = pnl[pnl > 0]
-    return float(wins.mean()) if len(wins) else None
+    return _stat(df, "avg_win")
 
 
 def avg_loss(df: pd.DataFrame) -> float | None:
     """Average losing trade as a positive amount."""
-    pnl = _pnl(df)
-    losses = pnl[pnl < 0]
-    return float(-losses.mean()) if len(losses) else None
+    return _stat(df, "avg_loss")
 
 
 def avg_win_loss_ratio(df: pd.DataFrame) -> float | None:
-    aw, al = avg_win(df), avg_loss(df)
-    if aw is None and al is None:
-        return None
-    if al is None:
-        return math.inf
-    if aw is None:
-        return 0.0
-    return aw / al
+    return _stat(df, "avg_win_loss_ratio")
 
 
 def expectancy(df: pd.DataFrame) -> float | None:
     """Expected P&L per trade: win rate × avg win − loss rate × avg loss."""
-    wr, lr = win_rate(df), loss_rate(df)
-    if wr is None or lr is None:
-        return None
-    return wr * (avg_win(df) or 0.0) - lr * (avg_loss(df) or 0.0)
+    return _stat(df, "expectancy")
+
+
+def trades_closed_on(df: pd.DataFrame, day: date) -> pd.DataFrame:
+    """Closed trades whose exit falls on ``day``."""
+    closed = closed_trades(df)
+    return closed if closed.empty else closed[closed["exit_time"].dt.date == day]
 
 
 # --------------------------------------------------------------------------- time series
@@ -312,21 +340,9 @@ class Stats:
 
 def summary_stats(df: pd.DataFrame) -> Stats:
     closed = closed_trades(df)
-    return Stats(
-        total_trades=total_trades(closed),
-        wins=win_count(closed),
-        losses=loss_count(closed),
-        net_pnl=net_pnl(closed),
-        gross_profit=gross_profit(closed),
-        gross_loss=gross_loss(closed),
-        win_rate=win_rate(closed),
-        profit_factor=profit_factor(closed),
-        avg_win=avg_win(closed),
-        avg_loss=avg_loss(closed),
-        avg_win_loss_ratio=avg_win_loss_ratio(closed),
-        expectancy=expectancy(closed),
-        max_drawdown=max_drawdown(closed),
-    )
+    stats = _pnl_stats(closed["net_pnl"].astype(float) if not closed.empty else pd.Series())
+    fields = {k: v for k, v in stats.items() if k != "loss_rate"}
+    return Stats(**fields, max_drawdown=max_drawdown(closed))
 
 
 # --------------------------------------------------------------------------- journal score
@@ -377,13 +393,13 @@ def journal_score(df: pd.DataFrame) -> JournalScore:
     closed = closed_trades(df)
     if closed.empty:
         return JournalScore(0.0, dict.fromkeys(SCORE_WEIGHTS, 0.0))
-    gp = gross_profit(closed)
-    dd = max_drawdown(closed)
+    stats = summary_stats(closed)
+    gp, dd = stats.gross_profit, stats.max_drawdown
     dd_score = 0.0 if gp <= 0 else (1 - min(dd / gp, 1.0)) * 100
     components = {
-        "Win rate": _scaled(win_rate(closed), WIN_RATE_TARGET),
-        "Profit factor": _scaled(profit_factor(closed), PROFIT_FACTOR_TARGET),
-        "Avg win/loss": _scaled(avg_win_loss_ratio(closed), WIN_LOSS_RATIO_TARGET),
+        "Win rate": _scaled(stats.win_rate, WIN_RATE_TARGET),
+        "Profit factor": _scaled(stats.profit_factor, PROFIT_FACTOR_TARGET),
+        "Avg win/loss": _scaled(stats.avg_win_loss_ratio, WIN_LOSS_RATIO_TARGET),
         "Consistency": consistency(closed) * 100,
         "Max drawdown": dd_score,
     }
@@ -406,18 +422,11 @@ BREAKDOWN_COLUMNS = [
 ]
 
 
-def _group_stats(group: pd.DataFrame) -> dict[str, float | int | None]:
-    return {
-        "trades": total_trades(group),
-        "wins": win_count(group),
-        "losses": loss_count(group),
-        "win_rate": win_rate(group),
-        "net_pnl": net_pnl(group),
-        "avg_pnl": expectancy(group),
-        "gross_profit": gross_profit(group),
-        "gross_loss": gross_loss(group),
-        "profit_factor": profit_factor(group),
-    }
+def _group_stats(pnl: pd.Series) -> dict[str, float | int | None]:
+    stats = _pnl_stats(pnl)
+    stats["trades"] = stats.pop("total_trades")
+    stats["avg_pnl"] = stats["expectancy"]
+    return {k: stats[k] for k in BREAKDOWN_COLUMNS}
 
 
 def breakdown(
@@ -445,9 +454,10 @@ def breakdown(
     frame = frame[frame["_group"].notna()]
     if frame.empty:
         return pd.DataFrame(columns=["group", *BREAKDOWN_COLUMNS])
+    pnl = frame["net_pnl"].astype(float)
     rows = [
         {"group": key, **_group_stats(group)}
-        for key, group in frame.groupby("_group", observed=True, sort=True)
+        for key, group in pnl.groupby(frame["_group"], observed=True, sort=True)
     ]
     result = pd.DataFrame(rows, columns=["group", *BREAKDOWN_COLUMNS])
     if sort_by:
@@ -480,18 +490,7 @@ def playbook_stats(df: pd.DataFrame) -> pd.DataFrame:
 
 def month_grid(year: int, month: int) -> list[list[date | None]]:
     """Weeks (Monday-first) of a month; days outside the month are None."""
-    import calendar
-
-    cal = calendar.Calendar(firstweekday=0)
     return [
         [d if d.month == month else None for d in week]
-        for week in cal.monthdatescalendar(year, month)
+        for week in calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)
     ]
-
-
-def tag_columns(tags: Sequence[tuple[str, str]]) -> dict[str, list[str]]:
-    """Split ``(category, name)`` tag pairs into lists per category."""
-    out: dict[str, list[str]] = {"setup": [], "mistake": [], "emotion": []}
-    for category, name in tags:
-        out.setdefault(category, []).append(name)
-    return out

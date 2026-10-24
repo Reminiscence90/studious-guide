@@ -27,7 +27,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from core.instruments import AssetClass
+from core.instruments import AssetClass, InstrumentSpec
 
 
 class Base(DeclarativeBase):
@@ -95,6 +95,21 @@ class Instrument(Base):
     # USD (or quote currency) value of a 1.0 price move for one unit of quantity.
     multiplier: Mapped[float] = mapped_column(Float, default=1.0)
     quote_currency: Mapped[str] = mapped_column(String(4), default="USD")
+
+    @classmethod
+    def from_spec(cls, spec: InstrumentSpec) -> Instrument:
+        return cls(
+            symbol=spec.symbol,
+            name=spec.name,
+            asset_class=spec.asset_class,
+            multiplier=spec.multiplier,
+            quote_currency=spec.quote_currency,
+        )
+
+    def to_spec(self) -> InstrumentSpec:
+        return InstrumentSpec(
+            self.symbol, self.asset_class, self.multiplier, self.quote_currency, self.name
+        )
 
 
 class BrokerPreset(Base):

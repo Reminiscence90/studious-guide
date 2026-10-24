@@ -63,16 +63,7 @@ def init_db(engine: Engine | None = None) -> Engine:
         # instruments added in a later version reach existing journals too.
         have = set(session.scalars(select(Instrument.symbol)))
         missing = [spec for spec in DEFAULT_INSTRUMENTS if spec.symbol not in have]
-        session.add_all(
-            Instrument(
-                symbol=spec.symbol,
-                name=spec.name,
-                asset_class=spec.asset_class,
-                multiplier=spec.multiplier,
-                quote_currency=spec.quote_currency,
-            )
-            for spec in missing
-        )
+        session.add_all(Instrument.from_spec(spec) for spec in missing)
         if missing and have:
             # Trades in the new instruments get their market and point value.
             session.flush()
@@ -104,10 +95,12 @@ _LATE_COLUMNS = [
 
 def _add_missing_columns(engine: Engine) -> None:
     inspector = inspect(engine)
+    columns: dict[str, set[str]] = {}
     with engine.begin() as conn:
         for table, column, ddl in _LATE_COLUMNS:
-            existing = {c["name"] for c in inspector.get_columns(table)}
-            if column not in existing:
+            if table not in columns:
+                columns[table] = {c["name"] for c in inspector.get_columns(table)}
+            if column not in columns[table]:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 

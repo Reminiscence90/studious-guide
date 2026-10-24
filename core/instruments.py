@@ -47,6 +47,18 @@ class AssetClass(enum.StrEnum):
             AssetClass.INDEX: "Index CFDs",
         }[self]
 
+    @property
+    def unit(self) -> str:
+        """What one unit of quantity is in this market."""
+        return {
+            AssetClass.STOCK: "Shares",
+            AssetClass.FUTURE: "Contracts",
+            AssetClass.FOREX: "Lots",
+            AssetClass.COMMODITY: "Contracts (futures) or lots (spot)",
+            AssetClass.CRYPTO: "Coins",
+            AssetClass.INDEX: "Lots",
+        }[self]
+
 
 @dataclass(frozen=True)
 class InstrumentSpec:

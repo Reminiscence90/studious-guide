@@ -2,24 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import streamlit as st
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import Session, selectinload
 
-from app.common import (
-    db,
-    fmt_money,
-    fmt_price,
-    fmt_qty,
-    get_filters,
-    load_filtered_trades,
-    pnl_color,
-)
+from app.charts import pnl_color
+from app.common import db, fmt_money, fmt_price, fmt_qty, get_filters, load_filtered_trades
 from core import metrics as m
 from core.db import SCREENSHOT_DIR
-from core.instruments import ACCOUNT_CURRENCY, AssetClass
+from core.instruments import ACCOUNT_CURRENCY
 from core.models import Playbook, Screenshot, Tag, TagCategory, Trade, TradeStatus
 from core.trades import (
     add_screenshot,
@@ -29,15 +23,6 @@ from core.trades import (
     set_playbook,
     set_trade_tags,
 )
-
-QTY_HELP = {
-    AssetClass.STOCK: "Shares",
-    AssetClass.FUTURE: "Contracts",
-    AssetClass.FOREX: "Lots",
-    AssetClass.COMMODITY: "Contracts (futures) or lots (spot)",
-    AssetClass.CRYPTO: "Coins",
-    AssetClass.INDEX: "Lots",
-}
 
 filters = get_filters()
 all_trades = load_filtered_trades(filters).sort_values("entry_time", ascending=False)
@@ -80,6 +65,18 @@ c_next.button("Older ▶", on_click=_step, args=(1,), disabled=pos == len(ids) -
 
 trade_id = int(selected)
 
+
+def update_trade(change: Callable[[Session, Trade], object], message: str = "") -> None:
+    """Apply ``change`` to this trade in one transaction, then refresh the page."""
+    with db() as s:
+        obj = s.get(Trade, trade_id)
+        if obj is not None:
+            change(s, obj)
+    if message:
+        st.toast(message)
+    st.rerun()
+
+
 with db() as s:
     trade = s.scalars(
         select(Trade)
@@ -96,9 +93,10 @@ with db() as s:
     all_tags = list(s.scalars(select(Tag).order_by(Tag.name)))
     playbooks = list(s.scalars(select(Playbook).options(selectinload(Playbook.checklist_items))))
     executions = [
-        (e.timestamp, e.raw_symbol or e.symbol, e.side.value, e.quantity, e.price, e.fees, e.source)
+        {"Time": e.timestamp, "Symbol": e.raw_symbol or e.symbol, "Side": e.side.value,
+         "Qty": e.quantity, "Price": e.price, "Fees": e.fees, "Source": e.source}
         for e in trade.executions
-    ]
+    ]  # fmt: skip
 
 cur = ACCOUNT_CURRENCY
 is_open = trade.status is TradeStatus.OPEN
@@ -126,7 +124,7 @@ st.html(
 )
 
 c = st.columns(4)
-c[0].metric("Quantity", fmt_qty(trade.quantity), help=QTY_HELP[trade.asset_class])
+c[0].metric("Quantity", fmt_qty(trade.quantity), help=trade.asset_class.unit)
 c[1].metric("Avg entry", fmt_price(trade.avg_entry_price))
 c[2].metric("Avg exit", fmt_price(trade.avg_exit_price))
 c[3].metric("R-multiple", "–" if r_mult is None else f"{r_mult:+.2f}R",
@@ -155,12 +153,7 @@ with left:
             "Markdown notes", value=trade.notes, height=200, key=f"notes_{trade_id}"
         )
         if st.button("Save notes", key=f"save_notes_{trade_id}"):
-            with db() as s:
-                obj = s.get(Trade, trade_id)
-                assert obj is not None
-                obj.notes = notes
-            st.toast("Notes saved")
-            st.rerun()
+            update_trade(lambda s, t: setattr(t, "notes", notes), "Notes saved")
     with tab_view:
         st.markdown(trade.notes or "_No notes yet — use the Edit tab._")
 
@@ -184,27 +177,13 @@ with left:
         key=f"upload_{trade_id}_{len(trade.screenshots)}",
     )
     if uploads and st.button("Upload", key=f"do_upload_{trade_id}"):
-        with db() as s:
-            obj = s.get(Trade, trade_id)
-            assert obj is not None
-            for f in uploads:
-                add_screenshot(s, obj, f.name, f.getvalue(), SCREENSHOT_DIR)
-        st.rerun()
+        update_trade(
+            lambda s, t: [add_screenshot(s, t, f.name, f.getvalue(), SCREENSHOT_DIR)
+                          for f in uploads]
+        )  # fmt: skip
 
     st.subheader("Executions")
-    st.dataframe(
-        {
-            "Time": [e[0] for e in executions],
-            "Symbol": [e[1] for e in executions],
-            "Side": [e[2] for e in executions],
-            "Qty": [e[3] for e in executions],
-            "Price": [e[4] for e in executions],
-            "Fees": [e[5] for e in executions],
-            "Source": [e[6] for e in executions],
-        },
-        hide_index=True,
-        width="stretch",
-    )
+    st.dataframe(executions, hide_index=True, width="stretch")
 
 # ------------------------------------------------------------------ tags / risk / playbook
 with right:
@@ -222,12 +201,7 @@ with right:
             help="Type a new name and press Enter to create a custom tag.",
         )
     if st.button("Save tags", key=f"save_tags_{trade_id}"):
-        with db() as s:
-            obj = s.get(Trade, trade_id)
-            assert obj is not None
-            set_trade_tags(s, obj, chosen)
-        st.toast("Tags saved")
-        st.rerun()
+        update_trade(lambda s, t: set_trade_tags(s, t, chosen), "Tags saved")
 
     st.subheader("Risk")
     with st.form(f"risk_{trade_id}"):
@@ -236,11 +210,7 @@ with right:
             format="%.4f",
         )  # fmt: skip
         if st.form_submit_button("Save stop loss"):
-            with db() as s:
-                obj = s.get(Trade, trade_id)
-                assert obj is not None
-                obj.stop_loss = stop or None
-            st.rerun()
+            update_trade(lambda s, t: setattr(t, "stop_loss", stop or None))
     if trade.stop_loss:
         risk = abs(trade.avg_entry_price - trade.stop_loss) * trade.quantity * trade.point_value
         st.caption(f"Initial risk: {fmt_money(risk, cur, signed=False)}")
@@ -266,20 +236,15 @@ with right:
             ):
                 met_ids.append(item.id)
     if st.button("Save playbook", key=f"save_pb_{trade_id}"):
-        with db() as s:
-            obj = s.get(Trade, trade_id)
-            assert obj is not None
-            set_playbook(s, obj, s.get(Playbook, pb_choice) if pb_choice else None, met_ids)
-        st.toast("Playbook saved")
-        st.rerun()
+        update_trade(
+            lambda s, t: set_playbook(s, t, s.get(Playbook, pb_choice) if pb_choice else None,
+                                      met_ids),
+            "Playbook saved",
+        )  # fmt: skip
 
     st.divider()
     with st.popover("🗑️ Delete trade"):
         st.write("This permanently deletes the trade, its executions and screenshots.")
         if st.button("Confirm delete", type="primary", key=f"del_trade_{trade_id}"):
-            with db() as s:
-                obj = s.get(Trade, trade_id)
-                if obj is not None:
-                    delete_trade(s, obj)
             st.session_state.pop("selected_trade_id", None)
-            st.rerun()
+            update_trade(delete_trade)
