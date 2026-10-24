@@ -46,14 +46,22 @@ for acc_id, name, n_trades in account_rows:
 
 with st.form("new_account", clear_on_submit=True):
     st.subheader("Add account")
-    name = st.text_input("Name")
-    if st.form_submit_button("Add account") and name.strip():
+    name = st.text_input("Name", key="new_account_name")
+    submitted = st.form_submit_button("Add account")
+if submitted:
+    new_name = name.strip()
+    if not new_name:
+        st.error("Enter a name for the account.")
+    else:
         with db() as s:
-            if s.scalars(select(Account).where(Account.name == name.strip())).first():
-                st.error("An account with that name already exists.")
-            else:
-                s.add(Account(name=name.strip()))
-                st.rerun()
+            exists = s.scalars(select(Account).where(Account.name == new_name)).first()
+            if exists is None:
+                s.add(Account(name=new_name))
+        # Rerun only after the block above has committed: st.rerun() stops the script
+        # at once, so calling it inside the block would discard the new account.
+        if exists is None:
+            st.rerun()
+        st.error(f"An account named {new_name!r} already exists.")
 
 # ------------------------------------------------------------------ instruments
 st.header("Instruments")

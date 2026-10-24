@@ -66,14 +66,16 @@ with row2[4]:
 left, right = st.columns([2, 1])
 with left:
     st.subheader("Cumulative P&L")
-    st.plotly_chart(equity_curve_figure(m.equity_curve(df), cur), width="stretch")
+    st.plotly_chart(
+        equity_curve_figure(m.equity_curve(df), cur), width="stretch", key="dash_equity"
+    )
 with right:
     st.subheader(f"Journal score · {score.total:.0f}")
-    st.plotly_chart(journal_score_radar(score), width="stretch")
+    st.plotly_chart(journal_score_radar(score), width="stretch", key="dash_score")
 
 st.subheader("Daily P&L")
 daily = m.daily_pnl(df)
-st.plotly_chart(daily_pnl_figure(daily, cur), width="stretch")
+st.plotly_chart(daily_pnl_figure(daily, cur), width="stretch", key="dash_daily")
 
 with st.expander("Journal score breakdown"):
     st.dataframe(

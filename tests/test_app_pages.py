@@ -64,3 +64,22 @@ def test_markets_filter_applies(seeded_db: None) -> None:
     at.multiselect(key="filter_assets").select("forex").run()
     total_fx = int(next(mt.value for mt in at.metric if mt.label == "Total trades"))
     assert 0 < total_fx < total_all
+
+
+def test_add_account_saves_it(seeded_db: None) -> None:
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.switch_page("settings.py").run()
+    at.text_input(key="new_account_name").input("Topstep")
+    next(b for b in at.button if b.label == "Add account").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Topstep" in at.multiselect(key="filter_accounts").options
+
+
+@pytest.mark.parametrize("page", PAGES)
+def test_page_renders_on_an_empty_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: str
+) -> None:
+    monkeypatch.setenv("TRADE_JOURNAL_DB_URL", f"sqlite:///{tmp_path / 'empty.db'}")
+    at = AppTest.from_file(APP, default_timeout=30).run()
+    at.switch_page(page).run()
+    assert not at.exception, [e.value for e in at.exception]
