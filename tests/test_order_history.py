@@ -179,3 +179,60 @@ def test_broker_pnl_survives_recalculation(session: Session, imported: ImportRes
 def test_totals_match_the_broker(session: Session, imported: ImportResult) -> None:
     closed = session.scalars(select(Trade).where(Trade.status == TradeStatus.CLOSED)).all()
     assert sum(t.net_pnl for t in closed) == pytest.approx(-511.50 + 401 + 49.7 - 40.3 + 2.1 + 167)
+
+
+def _rows(*rows: dict[str, str]) -> pd.DataFrame:
+    return pd.DataFrame([{**dict.fromkeys(MAPPING.values(), ""), **r} for r in rows])
+
+
+# A long XAUUSD position stopped out, as Alchemy exports it.
+ENTRY = {
+    "Symbol": "XAUUSD.R",
+    "Side": "Buy",
+    "Type": "Limit",
+    "Filled Qty": "0.55",
+    "Avg Fill Price": "4271",
+    "Status": "Filled",
+    "Update Time": "2026-09-25 12:02:09",
+    "Position ID": "XAUUSD.R:100140605",
+    "Commission": "-1.65",
+    "Order ID": "100140605",
+}
+STOP = {"Symbol": "XAUUSD.R", "Side": "Sell", "Type": "Stop Loss", "Filled Qty": "0.55",
+        "Stop Price": "4262", "Avg Fill Price": "4261.88", "Status": "Filled",
+        "Update Time": "2026-09-25 12:02:09", "Position ID": "XAUUSD.R:100140605",
+        "Commission": "-1.65", "Closed P&L": "-501.6", "Net Closed P&L": "-504.9",
+        "Order ID": "100140607"}  # fmt: skip
+
+
+@pytest.mark.parametrize("entry_time", ["2026-09-25 12:02:09", "2026-09-25 12:05:00"])
+def test_opening_order_stamped_at_or_after_its_stop(session: Session, entry_time: str) -> None:
+    # The opening order's Update Time can equal or follow the stop's fill time.
+    df = _rows(STOP, {**ENTRY, "Update Time": entry_time})
+    result = import_dataframe(session, 1, df, MAPPING, DATE_FORMAT)
+    assert result.warnings == []
+    trade = _trade(session, "XAUUSD.R:100140605")
+    assert trade.side is TradeSide.LONG
+    assert trade.status is TradeStatus.CLOSED
+    assert trade.net_pnl == pytest.approx(-504.9)
+    assert trade.stop_loss == 4262
+
+
+def test_stop_links_to_an_opening_order_imported_earlier(session: Session) -> None:
+    # First import: the opening order only, mapped without the Position ID column.
+    no_position = {k: v for k, v in MAPPING.items() if k != "position_id"}
+    import_dataframe(session, 1, _rows(ENTRY), no_position, DATE_FORMAT)
+    # Later export with both orders: the opening is a duplicate, the stop is new.
+    result = import_dataframe(session, 1, _rows(ENTRY, STOP), MAPPING, DATE_FORMAT)
+    assert result.warnings == []
+    assert result.duplicates_skipped == 1
+    trades = session.scalars(select(Trade)).all()
+    assert len(trades) == 1
+    assert trades[0].status is TradeStatus.CLOSED
+    assert trades[0].net_pnl == pytest.approx(-504.9)
+
+
+def test_position_without_any_opening_fill_is_still_reported(session: Session) -> None:
+    result = import_dataframe(session, 1, _rows(STOP), MAPPING, DATE_FORMAT)
+    assert len(result.warnings) == 1
+    assert session.scalars(select(Trade)).all() == []

@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Any
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from core.instruments import (
@@ -639,6 +639,17 @@ def position_order(fill: Fill) -> tuple[datetime, bool, int]:
     return (fill.timestamp, fill.is_exit, order)
 
 
+def opening_first(ordered: list[Fill]) -> list[Fill]:
+    """A broker position starts with an opening fill. Exports can stamp the opening
+    order with the same or a later time than its stop loss (the order's last update),
+    so if a closing fill sorts first, move the first opening fill to the front."""
+    if ordered and ordered[0].is_exit:
+        first_entry = next((i for i, f in enumerate(ordered) if not f.is_exit), None)
+        if first_entry is not None:
+            ordered = [ordered[first_entry], *ordered[:first_entry], *ordered[first_entry + 1 :]]
+    return ordered
+
+
 def group_by_position(fills: Iterable[Fill]) -> list[TradeGroup]:
     """Group fills that carry a broker position ID: each position becomes one trade
     (or more, if the position was flattened and reopened under the same ID)."""
@@ -647,7 +658,7 @@ def group_by_position(fills: Iterable[Fill]) -> list[TradeGroup]:
         by_key[(f.symbol, f.position_id)].append(f)
     groups: list[TradeGroup] = []
     for (symbol, _), pos_fills in by_key.items():
-        groups.extend(_walk(symbol, sorted(pos_fills, key=position_order)))
+        groups.extend(_walk(symbol, opening_first(sorted(pos_fills, key=position_order))))
     groups.sort(key=lambda g: (g.fills[0].timestamp, g.symbol))
     return groups
 
@@ -873,6 +884,11 @@ def import_fills(
             )
         )
     new_fills = [f for f in fills if f.import_hash not in existing]
+    # Already-imported fills per position: they link new fills to the stored trade.
+    known_hashes: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for f in fills:
+        if f.position_id and f.import_hash in existing:
+            known_hashes[(f.symbol, f.position_id)].append(f.import_hash)
     result.duplicates_skipped = len(fills) - len(new_fills)
     result.executions_imported = len(new_fills)
     if not new_fills:
@@ -883,12 +899,19 @@ def import_fills(
         by_key[(f.symbol, f.position_id)].append(f)
 
     for (symbol, position_id), key_fills in by_key.items():
-        open_trade = _open_trade_for(session, account_id, symbol, position_id)
+        if position_id:
+            open_trade = _trade_for_position(
+                session, account_id, symbol, position_id, known_hashes[(symbol, position_id)]
+            )
+        else:
+            open_trade = _open_trade_for(session, account_id, symbol, position_id)
         prior: list[Fill] = []
         if open_trade is not None:
             prior = [_fill_from_execution(e) for e in open_trade.executions]
+            if position_id:  # fills stored without the ID belong to this position
+                prior = [replace(f, position_id=f.position_id or position_id) for f in prior]
 
-        if position_id and not prior and min(key_fills, key=position_order).is_exit:
+        if position_id and all(f.is_exit for f in prior + key_fills):
             # The opening fill is not in this file (the position was opened before the
             # export range). Leave it out; a longer export will bring it in later.
             result.executions_imported -= len(key_fills)
@@ -974,6 +997,26 @@ def _open_trade_for(
         stmt = stmt.where(Trade.executions.any(Execution.position_id == position_id))
     else:
         stmt = stmt.where(~Trade.executions.any(Execution.position_id.is_not(None)))
+    return session.scalars(stmt.order_by(Trade.entry_time.desc())).first()
+
+
+def _trade_for_position(
+    session: Session,
+    account_id: int,
+    symbol: str,
+    position_id: str,
+    known_hashes: Sequence[str] = (),
+) -> Trade | None:
+    """The stored trade of a broker position, open or closed: the trade holding an
+    execution with this position ID, or one of the position's already-imported fills."""
+    match = Execution.position_id == position_id
+    if known_hashes:
+        match = or_(match, Execution.import_hash.in_(list(known_hashes)))
+    stmt = select(Trade).where(
+        Trade.account_id == account_id,
+        Trade.symbol == symbol,
+        Trade.executions.any(match),
+    )
     return session.scalars(stmt.order_by(Trade.entry_time.desc())).first()
 
 
