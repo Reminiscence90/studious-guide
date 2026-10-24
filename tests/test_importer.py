@@ -411,7 +411,7 @@ def test_sample_csv_imports_cleanly(session: Session) -> None:
     assert 190 <= len(trades) <= 220
     assert len(trades) < len(df)  # partial exits were grouped
     assert sum(tr.status is TradeStatus.OPEN for tr in trades) == 2
-    assert {tr.asset_class for tr in trades} == set(AssetClass)
+    assert {tr.asset_class for tr in trades} == set(AssetClass) - {AssetClass.INDEX}
     by_instrument = Counter(tr.instrument for tr in trades)
     assert by_instrument.most_common(1)[0][0] == "TSLA"
     es = next(tr for tr in trades if tr.symbol.startswith("ES") and tr.symbol != "ES")

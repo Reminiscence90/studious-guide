@@ -71,7 +71,9 @@ st.caption(
     "(set 1 if your broker exports units); USD-base pairs such as USDJPY are converted to "
     "USD at the exit price. Futures contract codes (ESZ6, MNQH27) match their root. "
     "Broker-suffixed symbols are treated as their base (XAUUSD.R → XAUUSD, a commodity; "
-    "EURUSD.R → EURUSD, forex). Symbols "
+    "EURUSD.R → EURUSD, forex). Index CFDs (US500, US100, US30) are their own market; "
+    "index futures such as ES and NQ stay under Futures. Check the units per lot for index "
+    "CFDs: they differ by broker (Alchemy Markets US500: 100). Symbols "
     "not listed are treated as US stocks with multiplier 1."
 )
 with db() as s:

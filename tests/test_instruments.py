@@ -42,8 +42,8 @@ def test_normalise_symbol(raw: str, clean: str) -> None:
 
 
 def test_suffix_dropped_for_user_defined_instrument() -> None:
-    assert normalise_symbol("US30.R") == "US30.R"
-    assert normalise_symbol("US30.R", known={"US30"}) == "US30"
+    assert normalise_symbol("DE40.R") == "DE40.R"
+    assert normalise_symbol("DE40.R", known={"DE40"}) == "DE40"
 
 
 def test_suffixed_symbols_resolve_to_base_spec() -> None:
@@ -86,5 +86,21 @@ def test_point_value_conversion() -> None:
 
 def test_asset_class_labels() -> None:
     assert [a.label for a in AssetClass] == [
-        "US stocks", "Futures", "Forex", "Commodities", "Crypto"
+        "US stocks", "Futures", "Forex", "Commodities", "Crypto", "Index CFDs"
     ]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("symbol", "asset", "multiplier"),
+    [
+        ("US500", AssetClass.INDEX, 100),
+        ("US500.R", AssetClass.INDEX, 100),
+        ("US100.r", AssetClass.INDEX, 1),
+        ("ES", AssetClass.FUTURE, 50),
+        ("ESZ6", AssetClass.FUTURE, 50),
+    ],
+)
+def test_index_cfds_and_index_futures(symbol: str, asset: AssetClass, multiplier: float) -> None:
+    spec = resolve(symbol, SPECS)
+    assert (spec.asset_class, spec.multiplier) == (asset, multiplier)
+    assert AssetClass.INDEX.label == "Index CFDs"

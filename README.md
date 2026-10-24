@@ -1,8 +1,8 @@
 # Trade Journal
 
 A personal trading journal and analytics app inspired by Tradezella, built with
-Streamlit, SQLAlchemy and pandas. It covers **US stocks, futures, forex, commodities
-and crypto**, with all accounts in **USD**. Import your broker's CSV, tag trades, keep
+Streamlit, SQLAlchemy and pandas. It covers **US stocks, futures, forex, commodities,
+crypto and index CFDs**, with all accounts in **USD**. Import your broker's CSV, tag trades, keep
 a daily journal, run your playbooks and see where your edge is.
 
 ![Dashboard](docs/screenshots/dashboard.png)
@@ -191,6 +191,7 @@ Every trade is resolved to an instrument, which gives it a **market** (asset cla
 | Commodities | contracts (futures) or lots (spot) | contract/lot size | `CL` 1,000, `MCL` 100, `GC` 100, `MGC` 10, `SI` 5,000, `NG` 10,000, `XAUUSD` 100 oz, `XAGUSD` 5,000 oz, `USOIL` 1,000 bbl |
 | Forex | standard lots | 100,000 | `EURUSD`, `GBPUSD`, `AUDUSD`; `USDJPY`/`USDCAD`/`USDCHF` are converted to USD at the exit price |
 | Crypto | coins | 1 | `BTCUSD`, `ETHUSD`, `SOLUSD`; `BTCUSDT`/`BTC-USD` are normalised to `BTCUSD` |
+| Index CFDs | lots | units per lot (broker-specific) | `US500` 100 (Alchemy Markets), `US100` 1, `US30` 1; `US500.R` is treated as `US500`. Index **futures** such as `ES`/`NQ` stay under Futures |
 
 How a symbol is resolved:
 
@@ -211,7 +212,9 @@ How a symbol is resolved:
 4. **Crypto pattern**: a known coin + `USD`/`USDT`/`USDC` → crypto, 1 per coin.
 5. Otherwise a **US stock** with point value 1.
 
-You can edit the table under **Settings → Instruments**. For example, set a forex
+You can edit the table under **Settings → Instruments**. Built-in instruments that are
+missing are added back when the app starts (that is how new ones, such as the index
+CFDs, reach an existing journal), so change a built-in rather than deleting it. For example, set a forex
 multiplier to 1 if your broker exports units instead of lots, or add a contract. Saving
 recalculates the P&L of every stored trade from its executions.
 

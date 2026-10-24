@@ -62,7 +62,7 @@ with tabs[0]:
     markets = m.breakdown(closed, "asset_class", sort_by="net_pnl")
     markets["group"] = markets["group"].map(lambda v: AssetClass(v).label)
     show(markets, "Market", horizontal=True, key="market")
-    st.caption("US stocks, futures, forex, commodities and crypto.")
+    st.caption("US stocks, futures, forex, commodities, crypto and index CFDs.")
 
 with tabs[1]:
     show(m.breakdown(closed, "instrument", sort_by="net_pnl"), "Symbol", horizontal=True, key="sym")

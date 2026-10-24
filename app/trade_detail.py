@@ -36,6 +36,7 @@ QTY_HELP = {
     AssetClass.FOREX: "Lots",
     AssetClass.COMMODITY: "Contracts (futures) or lots (spot)",
     AssetClass.CRYPTO: "Coins",
+    AssetClass.INDEX: "Lots",
 }
 
 filters = get_filters()

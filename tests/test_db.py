@@ -70,3 +70,43 @@ def test_init_db_adds_raw_symbol_to_older_databases() -> None:
     columns = {c["name"] for c in inspect(engine).get_columns("executions")}
     assert "raw_symbol" in columns
     init_db(engine)  # idempotent
+
+
+def test_new_builtin_instruments_reach_an_existing_journal(engine) -> None:  # type: ignore[no-untyped-def]
+    """A journal created before US500 existed: US500.R was a US stock until upgrade."""
+    from datetime import datetime
+
+    from core.db import init_db
+    from core.importer import Fill, import_fills
+    from core.models import ExecutionSide, Trade
+
+    with Session(engine) as s:
+        s.delete(s.scalars(select(Instrument).where(Instrument.symbol == "US500")).one())
+        t0 = datetime(2026, 10, 20, 22, 22, 3)
+        t1 = datetime(2026, 10, 20, 23, 12, 59)
+        import_fills(
+            s,
+            1,
+            [
+                Fill("US500.R", ExecutionSide.SELL, 0.43, 7745.12, t0, 1.29, order_id="1"),
+                Fill("US500.R", ExecutionSide.BUY, 0.43, 7745.01, t1, 1.29, order_id="2",
+                     is_exit=True, realized_pnl=4.73, realized_net_pnl=2.15),
+            ],
+        )  # fmt: skip
+        trade = s.scalars(select(Trade)).one()
+        # Older versions did not know US500, so the suffix was kept.
+        trade.symbol = "US500.R"
+        for e in trade.executions:
+            e.symbol = "US500.R"
+        s.commit()
+        assert trade.asset_class is AssetClass.STOCK
+
+    init_db(engine)  # upgrade
+    with Session(engine) as s:
+        trade = s.scalars(select(Trade)).one()
+        assert (trade.symbol, trade.asset_class) == ("US500", AssetClass.INDEX)
+        assert trade.point_value == 100
+        assert trade.net_pnl == 2.15
+        assert {e.raw_symbol for e in trade.executions} == {"US500.R"}
+        us500 = s.scalars(select(Instrument).where(Instrument.symbol == "US500")).one()
+        assert us500.asset_class is AssetClass.INDEX

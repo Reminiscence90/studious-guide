@@ -136,6 +136,7 @@ STOP_DISTANCE = {
     AssetClass.COMMODITY: 0.0035,
     AssetClass.FOREX: 0.0017,
     AssetClass.CRYPTO: 0.008,
+    AssetClass.INDEX: 0.003,
 }
 
 

@@ -825,6 +825,10 @@ def recalculate_trades(session: Session) -> int:
     specs = load_specs(session)
     trades = session.scalars(select(Trade)).all()
     for trade in trades:
+        # Re-normalise with the current instruments (US500.R → US500 once US500 is known).
+        trade.symbol = normalise_symbol(trade.symbol, specs)
+        for e in trade.executions:
+            e.symbol = trade.symbol
         fills = [_fill_from_execution(e) for e in trade.executions]
         if not fills:
             continue

@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from core.importer import BUILTIN_PRESETS
+from core.importer import BUILTIN_PRESETS, recalculate_trades
 from core.instruments import DEFAULT_INSTRUMENTS
 from core.models import DEFAULT_TAGS, Account, Base, BrokerPreset, Instrument, Tag
 
@@ -59,17 +59,24 @@ def init_db(engine: Engine | None = None) -> Engine:
         if session.scalar(select(Tag.id).limit(1)) is None:
             for category, names in DEFAULT_TAGS.items():
                 session.add_all(Tag(name=name, category=category) for name in names)
-        if session.scalar(select(Instrument.id).limit(1)) is None:
-            session.add_all(
-                Instrument(
-                    symbol=spec.symbol,
-                    name=spec.name,
-                    asset_class=spec.asset_class,
-                    multiplier=spec.multiplier,
-                    quote_currency=spec.quote_currency,
-                )
-                for spec in DEFAULT_INSTRUMENTS
+        # Built-in instruments that are missing are added (edited ones are kept), so
+        # instruments added in a later version reach existing journals too.
+        have = set(session.scalars(select(Instrument.symbol)))
+        missing = [spec for spec in DEFAULT_INSTRUMENTS if spec.symbol not in have]
+        session.add_all(
+            Instrument(
+                symbol=spec.symbol,
+                name=spec.name,
+                asset_class=spec.asset_class,
+                multiplier=spec.multiplier,
+                quote_currency=spec.quote_currency,
             )
+            for spec in missing
+        )
+        if missing and have:
+            # Trades in the new instruments get their market and point value.
+            session.flush()
+            recalculate_trades(session)
         session.commit()
     return engine
 

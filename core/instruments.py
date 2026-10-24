@@ -12,6 +12,8 @@ value of a 1.0 price move for one unit of quantity:
   dividing by the exit price.
 * **Spot commodities / CFDs** (XAUUSD, USOIL, ...): quantity in lots, multiplier =
   units per lot (gold 100 oz, silver 5,000 oz, oil 1,000 barrels).
+* **Index CFDs** (US500, US100, US30): quantity in lots, multiplier = units per lot,
+  which depends on the broker (Alchemy Markets US500: 100).
 
 The catalog below is the default; every value can be changed in Settings.
 """
@@ -32,6 +34,7 @@ class AssetClass(enum.StrEnum):
     FOREX = "forex"
     COMMODITY = "commodity"
     CRYPTO = "crypto"
+    INDEX = "index"
 
     @property
     def label(self) -> str:
@@ -41,6 +44,7 @@ class AssetClass(enum.StrEnum):
             AssetClass.FOREX: "Forex",
             AssetClass.COMMODITY: "Commodities",
             AssetClass.CRYPTO: "Crypto",
+            AssetClass.INDEX: "Index CFDs",
         }[self]
 
 
@@ -53,12 +57,13 @@ class InstrumentSpec:
     name: str = ""
 
 
-_F, _C, _X, _K, _S = (
+_F, _C, _X, _K, _S, _I = (
     AssetClass.FUTURE,
     AssetClass.COMMODITY,
     AssetClass.FOREX,
     AssetClass.CRYPTO,
     AssetClass.STOCK,
+    AssetClass.INDEX,
 )
 FOREX_LOT = 100_000.0
 
@@ -93,6 +98,10 @@ DEFAULT_INSTRUMENTS: list[InstrumentSpec] = [
     InstrumentSpec("XAGUSD", _C, 5000, "USD", "Silver spot (5,000 oz lot)"),
     InstrumentSpec("USOIL", _C, 1000, "USD", "WTI crude CFD (1,000 bbl lot)"),
     InstrumentSpec("UKOIL", _C, 1000, "USD", "Brent crude CFD (1,000 bbl lot)"),
+    # Index CFDs (quantity in lots; units per lot vary by broker, check yours)
+    InstrumentSpec("US500", _I, 100, "USD", "S&P 500 index CFD"),
+    InstrumentSpec("US100", _I, 1, "USD", "Nasdaq-100 index CFD"),
+    InstrumentSpec("US30", _I, 1, "USD", "Dow Jones 30 index CFD"),
     # Forex (quantity in standard lots)
     InstrumentSpec("EURUSD", _X, FOREX_LOT, "USD", "Euro / US Dollar"),
     InstrumentSpec("GBPUSD", _X, FOREX_LOT, "USD", "British Pound / US Dollar"),
