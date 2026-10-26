@@ -24,7 +24,7 @@ import hashlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -855,53 +855,83 @@ def _resummarise(trade: Trade, specs: Mapping[str, InstrumentSpec]) -> None:
     fills = [_fill_from_execution(e) for e in trade.executions]
     if fills:
         is_closed = trade.status is TradeStatus.CLOSED
-        spec = resolve(trade.symbol, dict(specs))
+        spec = resolve(trade.symbol, specs)
         _apply_summary(trade, summarize_fills(fills, trade.side, is_closed, spec))
 
 
-def _stored_closing_fills(
-    session: Session, account_id: int, fills: Sequence[Fill], existing: set[str]
+def _stored(session: Session, account_id: int, *conditions: Any) -> list[Execution]:
+    """Executions of the account matching ``conditions``, with their trades."""
+    stmt = select(Execution).where(Execution.account_id == account_id, *conditions)
+    return list(session.scalars(stmt.options(selectinload(Execution.trade))))
+
+
+def _stored_in(
+    session: Session, account_id: int, column: Any, values: Iterable[str]
+) -> list[Execution]:
+    """Executions of the account whose ``column`` is one of ``values`` (in chunks)."""
+    unique = list(dict.fromkeys(v for v in values if v))
+    return [
+        e
+        for i in range(0, len(unique), 500)
+        for e in _stored(session, account_id, column.in_(unique[i : i + 500]))
+    ]
+
+
+def _match_closing_fills(
+    session: Session,
+    account_id: int,
+    fills: Sequence[Fill],
+    by_hash: Mapping[str, Execution],
+    specs: Mapping[str, InstrumentSpec],
 ) -> dict[str, Execution]:
     """Stored executions for the file's closing fills that carry broker P&L.
 
     A fill matches by its fingerprint; failing that (it was imported by an older
     version that fingerprinted rows differently) by broker order ID; failing that by
     a stored closing fill with the same symbol, side, quantity and price within two
-    days, the closest in time."""
+    days, the closest in time. Only unmatched fills trigger the extra lookups."""
     wanted = [f for f in fills if f.realized_pnl is not None or f.realized_net_pnl is not None]
-    if not wanted:
-        return {}
-    stored = session.scalars(
-        select(Execution)
-        .where(Execution.account_id == account_id, Execution.trade_id.is_not(None))
-        .options(selectinload(Execution.trade))
-    ).all()
-    by_hash = {e.import_hash: e for e in stored}
-    by_order = {e.order_id: e for e in stored if e.order_id}
-    specs = load_specs(session)
-    closing = [e for e in stored if e.side is not _entry_side(e.trade.side)]
-    matched: dict[str, Execution] = {}
-    taken: set[int] = set()
-    for f in wanted:
-        if f.import_hash in existing:
-            e = by_hash.get(f.import_hash)
-        else:
-            e = by_order.get(f.order_id) if f.order_id else None
-            if e is None:
-                near = [
-                    c
-                    for c in closing
-                    if c.id not in taken
-                    and c.side is f.side
-                    and abs(c.quantity - f.quantity) < QTY_EPSILON
-                    and abs(c.price - f.price) < 1e-6
-                    and abs((c.timestamp - f.timestamp).total_seconds()) <= 2 * 86400
-                    and normalise_symbol(c.symbol, specs) == f.symbol
-                ]
-                e = min(near, key=lambda c: abs(c.timestamp - f.timestamp), default=None)
-        if e is not None and e.id not in taken:
-            matched[f.import_hash] = e
-            taken.add(e.id)
+    matched = {f.import_hash: by_hash[f.import_hash] for f in wanted if f.import_hash in by_hash}
+    rest = [f for f in wanted if f.import_hash not in by_hash]
+    if rest:
+        by_order = {
+            e.order_id: e
+            for e in _stored_in(session, account_id, Execution.order_id, [f.order_id for f in rest])
+        }
+        for f in rest:
+            if f.order_id in by_order:
+                matched[f.import_hash] = by_order[f.order_id]
+        rest = [f for f in rest if f.import_hash not in matched]
+    if rest:
+        window = timedelta(days=2)
+        candidates = [
+            e
+            for e in _stored(
+                session,
+                account_id,
+                Execution.trade_id.is_not(None),
+                Execution.timestamp.between(
+                    min(f.timestamp for f in rest) - window, max(f.timestamp for f in rest) + window
+                ),
+            )
+            if e.side is not _entry_side(e.trade.side)  # closing fills only
+        ]
+        taken = {e.id for e in matched.values()}
+        for f in rest:
+            near = [
+                c
+                for c in candidates
+                if c.id not in taken
+                and c.side is f.side
+                and abs(c.quantity - f.quantity) < QTY_EPSILON
+                and abs(c.price - f.price) < 1e-6
+                and abs(c.timestamp - f.timestamp) <= window
+                and normalise_symbol(c.symbol, specs) == f.symbol
+            ]
+            best = min(near, key=lambda c: abs(c.timestamp - f.timestamp), default=None)
+            if best is not None:
+                matched[f.import_hash] = best
+                taken.add(best.id)
     return matched
 
 
@@ -941,6 +971,26 @@ def _fill_from_execution(e: Execution) -> Fill:
     )
 
 
+def _execution_from_fill(f: Fill, account_id: int, trade_id: int, source: str) -> Execution:
+    return Execution(
+        account_id=account_id,
+        trade_id=trade_id,
+        symbol=f.symbol,
+        raw_symbol=f.raw_symbol or f.symbol,
+        side=f.side,
+        quantity=f.quantity,
+        price=f.price,
+        timestamp=f.timestamp,
+        fees=f.fees,
+        order_id=f.order_id or None,
+        position_id=f.position_id or None,
+        realized_pnl=f.realized_pnl,
+        realized_net_pnl=f.realized_net_pnl,
+        import_hash=f.import_hash,
+        source=source,
+    )
+
+
 def import_fills(
     session: Session,
     account_id: int,
@@ -960,23 +1010,18 @@ def import_fills(
         for f in fills
     ]
     fills = assign_fingerprints(account_id, fills)
-    hashes = [f.import_hash for f in fills]
-    existing: set[str] = set()
-    for i in range(0, len(hashes), 500):
-        chunk = hashes[i : i + 500]
-        existing.update(
-            session.scalars(
-                select(Execution.import_hash).where(
-                    Execution.account_id == account_id, Execution.import_hash.in_(chunk)
-                )
-            )
+    by_hash = {
+        e.import_hash: e
+        for e in _stored_in(
+            session, account_id, Execution.import_hash, [f.import_hash for f in fills]
         )
+    }
     # Closing fills that are already stored count as duplicates even when an older
     # version fingerprinted them differently; their broker P&L is refreshed.
-    stored = _stored_closing_fills(session, account_id, fills, existing)
-    existing |= set(stored)
+    closing = _match_closing_fills(session, account_id, fills, by_hash, specs)
+    existing = set(by_hash) | set(closing)
     new_fills = [f for f in fills if f.import_hash not in existing]
-    refreshed = _refresh_broker_pnl(fills, stored)
+    refreshed = _refresh_broker_pnl(fills, closing)
     session.flush()
     # Already-imported fills per position: they link new fills to the stored trade.
     known_hashes: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -1034,26 +1079,9 @@ def import_fills(
                 trade.stop_loss = initial_stop(summary, group.fills)
             session.flush()
             result.trade_ids.append(trade.id)
-            for f in group.fills:
-                session.add(
-                    Execution(
-                        account_id=account_id,
-                        trade_id=trade.id,
-                        symbol=f.symbol,
-                        raw_symbol=f.raw_symbol or f.symbol,
-                        side=f.side,
-                        quantity=f.quantity,
-                        price=f.price,
-                        timestamp=f.timestamp,
-                        fees=f.fees,
-                        order_id=f.order_id or None,
-                        position_id=f.position_id or None,
-                        realized_pnl=f.realized_pnl,
-                        realized_net_pnl=f.realized_net_pnl,
-                        import_hash=f.import_hash,
-                        source=source,
-                    )
-                )
+            session.add_all(
+                _execution_from_fill(f, account_id, trade.id, source) for f in group.fills
+            )
     # Refreshed trades that were not regrouped above get their figures recomputed.
     for trade_id in refreshed - set(result.trade_ids):
         trade = session.get(Trade, trade_id)

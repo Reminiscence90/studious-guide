@@ -48,19 +48,24 @@ def _engine_for(url: str) -> Engine:
 
 
 def init_db(engine: Engine | None = None) -> Engine:
-    """Create tables and default rows: a USD account, the default tags and instrument specs."""
+    """Create tables and default rows: a USD account, the default tags, and the built-in
+    instruments and broker presets that are missing (so ones added in a later version
+    reach existing journals; edited ones are kept)."""
     engine = engine or get_engine()
     Base.metadata.create_all(engine)
     _add_missing_columns(engine)
-    _ensure_builtin_presets(engine)
     with Session(engine) as session:
         if session.scalar(select(Account.id).limit(1)) is None:
             session.add(Account(name="Main"))
         if session.scalar(select(Tag.id).limit(1)) is None:
             for category, names in DEFAULT_TAGS.items():
                 session.add_all(Tag(name=name, category=category) for name in names)
-        # Built-in instruments that are missing are added (edited ones are kept), so
-        # instruments added in a later version reach existing journals too.
+        presets = set(session.scalars(select(BrokerPreset.name)))
+        session.add_all(
+            BrokerPreset(name=name, mapping=dict(mapping), datetime_format=fmt)
+            for name, (mapping, fmt) in BUILTIN_PRESETS.items()
+            if name not in presets
+        )
         have = set(session.scalars(select(Instrument.symbol)))
         missing = [spec for spec in DEFAULT_INSTRUMENTS if spec.symbol not in have]
         session.add_all(Instrument.from_spec(spec) for spec in missing)
@@ -70,16 +75,6 @@ def init_db(engine: Engine | None = None) -> Engine:
             recalculate_trades(session)
         session.commit()
     return engine
-
-
-def _ensure_builtin_presets(engine: Engine) -> None:
-    """Add the built-in broker presets that are missing (user edits are kept)."""
-    with Session(engine) as session:
-        names = set(session.scalars(select(BrokerPreset.name)))
-        for name, (mapping, fmt) in BUILTIN_PRESETS.items():
-            if name not in names:
-                session.add(BrokerPreset(name=name, mapping=dict(mapping), datetime_format=fmt))
-        session.commit()
 
 
 # Columns added after the first release: (table, column, DDL type). ``create_all`` only

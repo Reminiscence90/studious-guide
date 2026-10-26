@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 
 from app.common import db, delete_record
-from core.importer import recalculate_trades, replace_instruments
+from core.importer import load_specs, recalculate_trades, replace_instruments
 from core.instruments import ACCOUNT_CURRENCY, AssetClass, InstrumentSpec
-from core.models import Account, BrokerPreset, Instrument, Tag, TagCategory, Trade, trade_tags
+from core.models import Account, BrokerPreset, Tag, TagCategory, Trade, trade_tags
 from core.trades import get_or_create_tag
 
 st.title("Settings")
@@ -74,21 +76,11 @@ st.caption(
     "not listed are treated as US stocks with multiplier 1."
 )
 with db() as s:
-    instruments = pd.DataFrame(
-        [
-            {
-                "symbol": i.symbol,
-                "name": i.name,
-                "asset_class": i.asset_class.value,
-                "multiplier": i.multiplier,
-                "quote_currency": i.quote_currency,
-            }
-            for i in s.scalars(
-                select(Instrument).order_by(Instrument.asset_class, Instrument.symbol)
-            )
-        ],
-        columns=["symbol", "name", "asset_class", "multiplier", "quote_currency"],
-    )
+    current = sorted(load_specs(s).values(), key=lambda x: (x.asset_class.value, x.symbol))
+instruments = pd.DataFrame(
+    [{**asdict(x), "asset_class": x.asset_class.value} for x in current],
+    columns=["symbol", "name", "asset_class", "multiplier", "quote_currency"],
+)
 edited = st.data_editor(
     instruments,
     num_rows="dynamic",

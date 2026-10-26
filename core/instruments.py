@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import enum
 import re
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 
 ACCOUNT_CURRENCY = "USD"
@@ -187,7 +187,7 @@ def futures_root(symbol: str, known: Iterable[str]) -> str | None:
     return None
 
 
-def resolve(symbol: str, specs: dict[str, InstrumentSpec]) -> InstrumentSpec:
+def resolve(symbol: str, specs: Mapping[str, InstrumentSpec]) -> InstrumentSpec:
     """Find the spec for a (normalised) traded symbol.
 
     Order: exact match → futures contract root → forex pair pattern → crypto pair
