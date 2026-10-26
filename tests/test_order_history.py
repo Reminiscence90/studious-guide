@@ -283,3 +283,44 @@ def test_reimport_refreshes_broker_pnl_and_keeps_tags(session: Session) -> None:
 
     again = import_dataframe(session, 1, _rows(entry, corrected), MAPPING, DATE_FORMAT)
     assert again.trades_refreshed == 0
+
+
+def test_correction_matches_trades_imported_with_older_fingerprints(session: Session) -> None:
+    """Trades imported before order IDs were used: the closing fill is found by its
+    symbol, side, size and price, and only the broker P&L changes."""
+    no_ids = {k: v for k, v in MAPPING.items() if k not in ("order_id", "net_closed_pnl")}
+    entry = {
+        "Symbol": "XAUUSD.R",
+        "Side": "Buy",
+        "Type": "Limit",
+        "Filled Qty": "0.20",
+        "Avg Fill Price": "4277.97",
+        "Status": "Filled",
+        "Update Time": "2026-09-15 20:09:06",
+        "Position ID": "XAUUSD.R:98091831",
+        "Commission": "-0.60",
+        "Order ID": "98091831",
+    }
+    exit_ = {"Symbol": "XAUUSD.R", "Side": "Sell", "Type": "Stop Loss", "Filled Qty": "0.20",
+             "Avg Fill Price": "4278.1", "Status": "Filled", "Update Time": "2026-09-16 08:54:07",
+             "Position ID": "XAUUSD.R:98091831", "Commission": "-0.60", "Closed P&L": "2.60",
+             "Order ID": "98091833"}  # fmt: skip
+    import_dataframe(session, 1, _rows(entry, exit_), no_ids, DATE_FORMAT)
+    trade = session.scalars(select(Trade)).one()
+    assert trade.net_pnl == pytest.approx(2.60 - 1.20)
+
+    # The broker's statement: same close, a different clock and the net with swap.
+    statement = {**exit_, "Type": "Market", "Update Time": "2026-09-16 08:54:00",
+                 "Net Closed P&L": "-10.17"}  # fmt: skip
+    result = import_dataframe(session, 1, _rows(statement), MAPPING, DATE_FORMAT)
+    assert (result.executions_imported, result.trades_refreshed, result.warnings) == (0, 1, [])
+    session.refresh(trade)
+    assert trade.net_pnl == pytest.approx(-10.17)
+    assert session.scalars(select(Trade)).all() == [trade]
+
+    # A "close" matching the opening fill's side and price is not taken for a close.
+    fake = {**entry, "Closed P&L": "1.00", "Net Closed P&L": "1.00", "Order ID": "999"}
+    result = import_dataframe(session, 1, _rows(fake), MAPPING, DATE_FORMAT)
+    assert result.trades_refreshed == 0
+    session.refresh(trade)
+    assert trade.net_pnl == pytest.approx(-10.17)

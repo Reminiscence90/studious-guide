@@ -859,33 +859,67 @@ def _resummarise(trade: Trade, specs: Mapping[str, InstrumentSpec]) -> None:
         _apply_summary(trade, summarize_fills(fills, trade.side, is_closed, spec))
 
 
-def _refresh_broker_pnl(session: Session, account_id: int, duplicates: Sequence[Fill]) -> set[int]:
+def _stored_closing_fills(
+    session: Session, account_id: int, fills: Sequence[Fill], existing: set[str]
+) -> dict[str, Execution]:
+    """Stored executions for the file's closing fills that carry broker P&L.
+
+    A fill matches by its fingerprint; failing that (it was imported by an older
+    version that fingerprinted rows differently) by broker order ID; failing that by
+    a stored closing fill with the same symbol, side, quantity and price within two
+    days, the closest in time."""
+    wanted = [f for f in fills if f.realized_pnl is not None or f.realized_net_pnl is not None]
+    if not wanted:
+        return {}
+    stored = session.scalars(
+        select(Execution)
+        .where(Execution.account_id == account_id, Execution.trade_id.is_not(None))
+        .options(selectinload(Execution.trade))
+    ).all()
+    by_hash = {e.import_hash: e for e in stored}
+    by_order = {e.order_id: e for e in stored if e.order_id}
+    specs = load_specs(session)
+    closing = [e for e in stored if e.side is not _entry_side(e.trade.side)]
+    matched: dict[str, Execution] = {}
+    taken: set[int] = set()
+    for f in wanted:
+        if f.import_hash in existing:
+            e = by_hash.get(f.import_hash)
+        else:
+            e = by_order.get(f.order_id) if f.order_id else None
+            if e is None:
+                near = [
+                    c
+                    for c in closing
+                    if c.id not in taken
+                    and c.side is f.side
+                    and abs(c.quantity - f.quantity) < QTY_EPSILON
+                    and abs(c.price - f.price) < 1e-6
+                    and abs((c.timestamp - f.timestamp).total_seconds()) <= 2 * 86400
+                    and normalise_symbol(c.symbol, specs) == f.symbol
+                ]
+                e = min(near, key=lambda c: abs(c.timestamp - f.timestamp), default=None)
+        if e is not None and e.id not in taken:
+            matched[f.import_hash] = e
+            taken.add(e.id)
+    return matched
+
+
+def _refresh_broker_pnl(fills: Sequence[Fill], stored: Mapping[str, Execution]) -> set[int]:
     """Update the broker's realised P&L on already-imported fills when the file has a
     new value (e.g. a Net Closed P&L that was empty before). Returns the trade IDs."""
-    with_pnl = {
-        f.import_hash: f
-        for f in duplicates
-        if f.realized_pnl is not None or f.realized_net_pnl is not None
-    }
     changed: set[int] = set()
-    hashes = list(with_pnl)
-    for i in range(0, len(hashes), 500):
-        stored = session.scalars(
-            select(Execution).where(
-                Execution.account_id == account_id,
-                Execution.import_hash.in_(hashes[i : i + 500]),
-            )
+    for f in fills:
+        e = stored.get(f.import_hash)
+        if e is None or e.trade_id is None:
+            continue
+        new = (
+            e.realized_pnl if f.realized_pnl is None else f.realized_pnl,
+            e.realized_net_pnl if f.realized_net_pnl is None else f.realized_net_pnl,
         )
-        for e in stored:
-            f = with_pnl[e.import_hash]
-            new = (
-                e.realized_pnl if f.realized_pnl is None else f.realized_pnl,
-                e.realized_net_pnl if f.realized_net_pnl is None else f.realized_net_pnl,
-            )
-            if new != (e.realized_pnl, e.realized_net_pnl) and e.trade_id is not None:
-                e.realized_pnl, e.realized_net_pnl = new
-                changed.add(e.trade_id)
-    session.flush()
+        if new != (e.realized_pnl, e.realized_net_pnl):
+            e.realized_pnl, e.realized_net_pnl = new
+            changed.add(e.trade_id)
     return changed
 
 
@@ -937,10 +971,13 @@ def import_fills(
                 )
             )
         )
+    # Closing fills that are already stored count as duplicates even when an older
+    # version fingerprinted them differently; their broker P&L is refreshed.
+    stored = _stored_closing_fills(session, account_id, fills, existing)
+    existing |= set(stored)
     new_fills = [f for f in fills if f.import_hash not in existing]
-    refreshed = _refresh_broker_pnl(
-        session, account_id, [f for f in fills if f.import_hash in existing]
-    )
+    refreshed = _refresh_broker_pnl(fills, stored)
+    session.flush()
     # Already-imported fills per position: they link new fills to the stored trade.
     known_hashes: dict[tuple[str, str], list[str]] = defaultdict(list)
     for f in fills:
