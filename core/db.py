@@ -11,9 +11,9 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from core.importer import BUILTIN_PRESETS, recalculate_trades
-from core.instruments import DEFAULT_INSTRUMENTS
-from core.models import DEFAULT_TAGS, Account, Base, BrokerPreset, Instrument, Tag
+from core.importer import BUILTIN_PRESETS, load_specs, recalculate_trades
+from core.instruments import DEFAULT_INSTRUMENTS, STABLE_QUOTES, resolve
+from core.models import DEFAULT_TAGS, Account, Base, BrokerPreset, Instrument, Tag, Trade
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("TRADE_JOURNAL_DATA_DIR", PROJECT_ROOT / "data"))
@@ -69,10 +69,21 @@ def init_db(engine: Engine | None = None) -> Engine:
         have = set(session.scalars(select(Instrument.symbol)))
         missing = [spec for spec in DEFAULT_INSTRUMENTS if spec.symbol not in have]
         session.add_all(Instrument.from_spec(spec) for spec in missing)
+        session.flush()
         if missing and have:
             # Trades in the new instruments get their market and point value.
-            session.flush()
             recalculate_trades(session)
+        else:
+            # Pairs not quoted in USD take their point value from the broker's USD P&L;
+            # recalculating them keeps journals from older versions up to date.
+            specs = load_specs(session)
+            crosses = [
+                symbol
+                for symbol in session.scalars(select(Trade.symbol).distinct())
+                if resolve(symbol, specs).quote_currency not in STABLE_QUOTES
+            ]
+            if crosses:
+                recalculate_trades(session, crosses)
         session.commit()
     return engine
 

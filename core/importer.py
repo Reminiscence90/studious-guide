@@ -32,6 +32,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from core.instruments import (
+    STABLE_QUOTES,
     AssetClass,
     InstrumentSpec,
     default_specs,
@@ -750,6 +751,8 @@ def summarize_fills(
       multiplier, forex lot size, USD conversion); it is 1 when no spec is given.
     * If every closing fill carries the broker's realised P&L, their sum is used as the
       gross P&L instead (it is already in USD, which matters for crosses like EURJPY).
+      For pairs not quoted in USD the point value is then taken from it too (USD P&L ÷
+      price move), so risk and R-multiples use the broker's conversion rate.
     * net P&L: gross P&L minus all fees; or, if every closing fill carries the broker's
       net realised P&L, their sum (which includes swap/financing).
     """
@@ -766,6 +769,9 @@ def summarize_fills(
     gross = (avg_exit - avg_entry) * exit_qty * direction * pv if avg_exit is not None else 0.0
     if exits and all(f.realized_pnl is not None for f in exits):
         gross = sum(f.realized_pnl or 0.0 for f in exits)
+        move = (avg_exit - avg_entry) * exit_qty * direction if avg_exit is not None else 0.0
+        if spec.quote_currency not in STABLE_QUOTES and move and gross / move > 0:
+            pv = gross / move
     fees = sum(f.fees for f in fills)
     net = gross - fees
     if exits and all(f.realized_net_pnl is not None for f in exits):
@@ -833,13 +839,17 @@ def replace_instruments(session: Session, specs: Sequence[InstrumentSpec]) -> No
     session.flush()
 
 
-def recalculate_trades(session: Session) -> int:
-    """Recompute every trade's P&L from its executions with the current instrument specs.
+def recalculate_trades(session: Session, symbols: Iterable[str] | None = None) -> int:
+    """Recompute trades' P&L from their executions with the current instrument specs
+    (every trade, or only those in ``symbols``).
 
     Use after changing a multiplier. Returns the number of trades updated.
     """
     specs = load_specs(session)
-    trades = session.scalars(select(Trade).options(selectinload(Trade.executions))).all()
+    stmt = select(Trade).options(selectinload(Trade.executions))
+    if symbols is not None:
+        stmt = stmt.where(Trade.symbol.in_(list(symbols)))
+    trades = session.scalars(stmt).all()
     for trade in trades:
         # Re-normalise with the current instruments (US500.R → US500 once US500 is known).
         trade.symbol = normalise_symbol(trade.symbol, specs)

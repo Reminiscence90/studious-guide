@@ -193,7 +193,7 @@ Every trade is resolved to an instrument, which gives it a **market** (asset cla
 | US stocks | shares | 1 | `TSLA`, `NVDA`, `AAPL`; any symbol not otherwise recognised |
 | Futures | contracts | contract multiplier | `ES` 50, `MES` 5, `NQ` 20, `MNQ` 2, `YM` 5, `RTY` 50, `ZN` 1,000, `6E` 125,000 |
 | Commodities | contracts (futures) or lots (spot) | contract/lot size | `CL` 1,000, `MCL` 100, `GC` 100, `MGC` 10, `SI` 5,000, `NG` 10,000, `XAUUSD` 100 oz, `XAGUSD` 5,000 oz, `USOIL` 1,000 bbl |
-| Forex | standard lots | 100,000 | `EURUSD`, `GBPUSD`, `AUDUSD`; `USDJPY`/`USDCAD`/`USDCHF` are converted to USD at the exit price |
+| Forex | standard lots | 100,000 | `EURUSD`, `GBPUSD`, `AUDUSD`; `USDJPY`/`USDCAD`/`USDCHF` are converted to USD at the exit price. When the broker reports the USD P&L (Alchemy `Closed P&L`), any pair not quoted in USD (`EURJPY`, `GBPJPY`, `USDJPY`) is converted at the broker's rate instead, so risk and R-multiples are in USD |
 | Crypto | coins | 1 | `BTCUSD`, `ETHUSD`, `SOLUSD`; `BTCUSDT`/`BTC-USD` are normalised to `BTCUSD` |
 | Index CFDs | lots | units per lot (broker-specific) | `US500` 100 (Alchemy Markets), `US100` 1, `US30` 1; `US500.R` is treated as `US500`. Index **futures** such as `ES`/`NQ` stay under Futures |
 

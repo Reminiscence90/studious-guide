@@ -13,7 +13,8 @@ from app.charts import pnl_color
 from app.common import db, fmt_money, fmt_price, fmt_qty, get_filters, load_filtered_trades
 from core import metrics as m
 from core.db import SCREENSHOT_DIR
-from core.instruments import ACCOUNT_CURRENCY
+from core.importer import load_specs
+from core.instruments import ACCOUNT_CURRENCY, STABLE_QUOTES, resolve
 from core.models import Playbook, Screenshot, Tag, TagCategory, Trade, TradeStatus
 from core.trades import (
     add_screenshot,
@@ -92,6 +93,7 @@ with db() as s:
     ).one()
     all_tags = list(s.scalars(select(Tag).order_by(Tag.name)))
     playbooks = list(s.scalars(select(Playbook).options(selectinload(Playbook.checklist_items))))
+    spec = resolve(trade.symbol, load_specs(s))
     executions = [
         {"Time": e.timestamp, "Symbol": e.raw_symbol or e.symbol, "Side": e.side.value,
          "Qty": e.quantity, "Price": e.price, "Fees": e.fees, "Source": e.source}
@@ -99,6 +101,8 @@ with db() as s:
     ]  # fmt: skip
 
 cur = ACCOUNT_CURRENCY
+# Pairs quoted in another currency (EURJPY) are converted to USD at the broker's rate.
+converted = spec.quote_currency not in STABLE_QUOTES
 is_open = trade.status is TradeStatus.OPEN
 holding = (trade.exit_time - trade.entry_time) if trade.exit_time else None
 r_mult = m.r_multiple(
@@ -114,7 +118,8 @@ st.html(
     f"{trade.side.value.upper()}</span>"
     f"<span style='padding:2px 10px;border-radius:12px;border:1px solid rgba(128,128,128,.5)'>"
     f"{trade.asset_class.label}"
-    + (f" · {trade.instrument} ×{trade.point_value:,.6g}" if trade.point_value != 1 else "")
+    + (f" · {trade.instrument} ×{spec.multiplier:,.6g}" if spec.multiplier != 1 else "")
+    + (f" · {spec.quote_currency}→{cur}" if converted else "")
     + "</span>"
     f"<span style='opacity:.7'>{trade.status.value} · {trade.account.name}</span>"
     f"<span style='font-size:1.6rem;font-weight:600;color:{color}'>"
@@ -212,8 +217,12 @@ with right:
         if st.form_submit_button("Save stop loss"):
             update_trade(lambda s, t: setattr(t, "stop_loss", stop or None))
     if trade.stop_loss:
-        risk = abs(trade.avg_entry_price - trade.stop_loss) * trade.quantity * trade.point_value
-        st.caption(f"Initial risk: {fmt_money(risk, cur, signed=False)}")
+        distance = abs(trade.avg_entry_price - trade.stop_loss) * trade.quantity
+        risk = fmt_money(distance * trade.point_value, cur, signed=False)
+        if converted:
+            local = fmt_money(distance * spec.multiplier, spec.quote_currency, signed=False)
+            risk += f" ({local} converted at the broker's rate)"
+        st.caption(f"Initial risk: {risk}")
 
     st.subheader("Playbook")
     pb_by_id = {p.id: p for p in playbooks}

@@ -121,6 +121,25 @@ def test_cross_pair_uses_broker_pnl_in_usd(session: Session, imported: ImportRes
     assert trade.asset_class is AssetClass.FOREX
     assert trade.gross_pnl == pytest.approx(170.00)  # not 0.5 × 100,000 × 0.5 JPY
     assert trade.net_pnl == pytest.approx(167.00)
+    # ¥25,000 = $170, so a 1.00 move on one lot is worth $680: risk and R are in USD.
+    assert trade.point_value == pytest.approx(170.00 / (0.5 * 0.5))
+    risk = (181.0 - 180.0) * 0.5 * trade.point_value  # a stop 1 yen above the entry
+    assert risk == pytest.approx(340.00)
+
+
+def test_existing_cross_trades_are_converted_on_start_up(engine, session: Session) -> None:  # type: ignore[no-untyped-def]
+    from core.db import init_db
+
+    import_dataframe(
+        session, 1, pd.read_csv(CSV, dtype=str, keep_default_na=False), MAPPING, DATE_FORMAT
+    )
+    trade = _trade(session, "EURJPY.R:7000")
+    trade.point_value = 100_000.0  # as stored by older versions
+    session.commit()
+    init_db(engine)
+    session.refresh(trade)
+    assert trade.point_value == pytest.approx(680.0)
+    assert trade.net_pnl == pytest.approx(167.00)
 
 
 def test_open_position_and_its_working_stop(session: Session, imported: ImportResult) -> None:
